@@ -59,6 +59,9 @@ export function enableDragAndDrop({ root, tree, zones, model, expand, onDrop, on
   root.addEventListener('pointerdown', (event) => {
     pressedButton = Boolean(event.target.closest?.('.action'));
   });
+  document.addEventListener('pointerup', () => {
+    pressedButton = false;
+  });
   root.addEventListener('dragstart', onDragStart);
   root.addEventListener('dragover', onDragOver);
   root.addEventListener('dragleave', onDragLeave);
@@ -68,7 +71,9 @@ export function enableDragAndDrop({ root, tree, zones, model, expand, onDrop, on
   return { isDragging: () => source !== null };
 
   function onDragStart(event) {
-    if (pressedButton) {
+    const fromButton = pressedButton;
+    pressedButton = false;
+    if (fromButton) {
       event.preventDefault(); // cancel the drag; the click still happens
       return;
     }

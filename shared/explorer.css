@@ -144,9 +144,20 @@
   pointer-events: none;
 }
 
+/* The arrow is its own small button: it folds and unfolds (a click on the
+   rest of the row selects). The padding makes it easier to hit. */
 .explorer .chevron {
+  box-sizing: content-box;
+  margin: -4px;
+  padding: 4px;
+  border-radius: 5px;
   color: var(--text-muted);
   transition: transform 120ms ease;
+}
+
+.explorer .chevron:hover {
+  background: var(--hover);
+  color: var(--text);
 }
 
 .explorer .toggle[aria-expanded="true"] .chevron {
@@ -165,13 +176,33 @@
 
 /* ---- Windows ------------------------------------------------------------------ */
 
+/* Windows (and the Naps heading below them) are the top level, so each one's
+   row is a band of its own, a bit larger, with room between windows. */
 .explorer .window + .window {
-  margin-top: 8px;
+  margin-top: 14px;
 }
 
-.explorer .window > .row .toggle {
-  height: 34px;
-  font-weight: 600;
+.explorer .window > .row,
+.explorer .naps > .row {
+  border-radius: 8px;
+  background-color: var(--band);
+}
+
+.explorer .window > .row:hover,
+.explorer .naps > .row:hover {
+  background-color: var(--band-hover);
+}
+
+.explorer .window > .row .toggle,
+.explorer .naps > .row .toggle {
+  height: 38px;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.explorer .window > .children,
+.explorer .naps > .children {
+  padding-top: 2px;
 }
 
 .explorer .node-icon {
@@ -305,38 +336,46 @@
   white-space: nowrap;
 }
 
-/* Selected with Ctrl/Shift+click. Comes after .is-active so selection wins. */
+/* Selected rows, and selected windows, groups and naps (one block with
+   everything in them, like a selected folder). Comes after .is-active so
+   selection wins. The outline's top and bottom edges and corners are
+   variables, so neighbours can merge below. */
 .explorer .row.is-selected,
-.explorer .row.is-selected:hover {
+.explorer .row.is-selected:hover,
+.explorer .branch.is-selected-branch {
+  --edge-top: 1px;
+  --edge-bottom: 1px;
+  --round-top: 6px;
+  --round-bottom: 6px;
+  border-radius: var(--round-top) var(--round-top) var(--round-bottom) var(--round-bottom);
   background-color: var(--selection);
-  box-shadow: inset 0 0 0 1px var(--selection-edge);
-}
-
-/* Selected rows next to each other merge into one block, like selected
-   files: no outline or rounding where they touch. */
-.explorer .row.is-selected:has(+ .row.is-selected) {
-  border-bottom-left-radius: 0;
-  border-bottom-right-radius: 0;
   box-shadow:
     inset 1px 0 var(--selection-edge),
     inset -1px 0 var(--selection-edge),
-    inset 0 1px var(--selection-edge);
+    inset 0 var(--edge-top) var(--selection-edge),
+    inset 0 calc(-1 * var(--edge-bottom)) var(--selection-edge);
 }
 
-.explorer .row.is-selected + .row.is-selected {
-  border-top-left-radius: 0;
-  border-top-right-radius: 0;
-  box-shadow:
-    inset 1px 0 var(--selection-edge),
-    inset -1px 0 var(--selection-edge),
-    inset 0 -1px var(--selection-edge);
+/* Selected things next to each other merge into one block, like selected
+   files: no outline or rounding where they touch. That includes a selected
+   group and the selected tab just above or below it, and the last selected
+   tab of a group with the selected tab right after the group. */
+.explorer :is(.row.is-selected, .branch.is-selected-branch):has(+ :is(.row.is-selected, .branch.is-selected-branch)),
+.explorer .branch:has(+ .row.is-selected) > .children:not([hidden]) > .row.is-selected:last-child {
+  --edge-bottom: 0px;
+  --round-bottom: 0px;
 }
 
-.explorer .row.is-selected + .row.is-selected:has(+ .row.is-selected) {
-  border-radius: 0;
-  box-shadow:
-    inset 1px 0 var(--selection-edge),
-    inset -1px 0 var(--selection-edge);
+.explorer :is(.row.is-selected, .branch.is-selected-branch) + :is(.row.is-selected, .branch.is-selected-branch),
+.explorer .branch:has(> .children:not([hidden]) > .row.is-selected:last-child) + .row.is-selected {
+  --edge-top: 0px;
+  --round-top: 0px;
+}
+
+/* Inside a selected block, the rows draw nothing themselves. */
+.explorer .branch.is-selected-branch .row.is-selected {
+  background-color: transparent;
+  box-shadow: none;
 }
 
 /* Asleep (discarded) tabs are dimmed, like Chrome does in the tab strip. */
@@ -348,25 +387,27 @@
   color: var(--text-muted);
 }
 
-/* Mute and close buttons appear when the row is hovered or focused. */
+/* A row's buttons (nap, ⋯, ✕): big enough to hit easily, and always there
+   but faint, so you can see where they are before you reach them. Everything
+   else is in the right-click menu. */
 .explorer .action {
   flex: none;
   display: grid;
   place-items: center;
-  width: 26px;
-  height: 26px;
+  width: 32px;
+  height: 30px;
   margin-right: 2px;
   padding: 0;
   border: 0;
-  border-radius: 6px;
+  border-radius: 7px;
   background: none;
   color: var(--text-muted);
   cursor: pointer;
-  opacity: 0;
+  opacity: 0.35;
 }
 
-/* Shown on hover, or when the keyboard (not a mouse click) put focus in the
-   row, so the last row you clicked doesn't keep its buttons showing. */
+/* Full strength on the row under the mouse, or when the keyboard (not a
+   mouse click) put focus in the row. */
 .explorer .row:hover .action,
 .explorer .row:has(:focus-visible) .action {
   opacity: 1;
@@ -497,12 +538,7 @@
 }
 
 .explorer .branch.naps {
-  margin-top: 16px;
-}
-
-.explorer .naps > .row .toggle {
-  height: 34px;
-  font-weight: 600;
+  margin-top: 22px;
 }
 
 .explorer .naps > .row .node-icon {
@@ -539,8 +575,14 @@
 
 /* ---- Selection bar ------------------------------------------------------------------ */
 
+/* Lies over the search row (the toolbar is its positioned parent), so the
+   tree doesn't move when it appears. */
 .explorer .selection-bar {
-  flex-basis: 100%;
+  position: absolute;
+  inset: 12px 0 auto;
+  z-index: 1;
+  box-sizing: border-box;
+  min-height: calc(100% - 24px);
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -549,6 +591,16 @@
   border-radius: 8px;
   background: var(--selection);
   box-shadow: inset 0 0 0 1px var(--selection-edge);
+}
+
+.explorer .selection-bar[hidden] {
+  display: none;
+}
+
+/* The bar shows the count, so the summary under it can go while it's up
+   (in narrow views it would peek out below the bar). */
+.explorer .toolbar:has(.selection-bar:not([hidden])) .summary {
+  visibility: hidden;
 }
 
 .explorer .selection-count {
@@ -570,6 +622,61 @@
 
 .explorer .selection-bar button:hover {
   background: var(--hover);
+}
+
+/* Close / Delete: red on hover, so they don't look like the harmless buttons. */
+.explorer .selection-bar button.danger:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+/* "Cancel" sits apart on the right, as plain text: it only unselects. */
+.explorer .selection-divider {
+  width: 1px;
+  height: 20px;
+  margin: 0 2px;
+  background: var(--selection-edge);
+}
+
+.explorer .selection-bar button.ghost {
+  border-color: transparent;
+  background: transparent;
+}
+
+.explorer .selection-bar button.ghost:hover {
+  background: var(--bg);
+}
+
+/* ---- Renaming in place (windows and naps) --------------------------------------------- */
+
+/* A selected row's name looks like a text box on hover: click it to rename,
+   like a file name. */
+.explorer .renamable {
+  margin: -2px -6px;
+  padding: 2px 6px;
+  border-radius: 5px;
+}
+
+.explorer .row.is-selected:hover .renamable:hover {
+  box-shadow: inset 0 0 0 1px var(--border);
+  background: var(--bg);
+  cursor: text;
+}
+
+.explorer .rename-input {
+  position: absolute;
+  z-index: 3;
+  top: 50%;
+  height: 28px;
+  box-sizing: border-box;
+  padding: 0 5px;
+  border: 1px solid var(--focus);
+  border-radius: 5px;
+  outline: none;
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  transform: translateY(-50%);
 }
 
 /* ---- Dialog (rename, import, export) ---------------------------------------------------- */
@@ -713,6 +820,34 @@
   font-weight: 500;
 }
 
+/* A row of color dots, e.g. a group's color; the current one is ringed. */
+.explorer .menu-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 6px 10px 8px;
+}
+
+.explorer .menu-swatch {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--group);
+  cursor: pointer;
+}
+
+.explorer .menu-swatch:hover,
+.explorer .menu-swatch:focus-visible {
+  outline: 2px solid var(--group);
+  outline-offset: 2px;
+}
+
+.explorer .menu-swatch[aria-checked="true"] {
+  box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--text);
+}
+
 /* Checkbox items (e.g. "Keep links after waking") show a check when on. */
 .explorer .menu-item[aria-checked] .menu-label::before {
   content: "";
@@ -803,6 +938,15 @@
 /* ---- Narrow views: popup and side panel ------------------------------------------ */
 
 @container (max-width: 420px) {
+  /* Selection bar buttons become icons (their tooltips say what they do). */
+  .explorer .selection-bar .button-text {
+    display: none;
+  }
+
+  .explorer .selection-bar button:has(.button-text) {
+    padding: 0 7px;
+  }
+
   .explorer .domain,
   .explorer .hint {
     display: none;

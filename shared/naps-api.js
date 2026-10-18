@@ -98,37 +98,88 @@ export async function stopNapSync() {
  * @param {string} [options.intoNapId]  add to the end of this nap instead of making a new one
  * @param {string} [options.title]      name for a new nap ('' = its date)
  * @param {string} [options.color]      tab group color, when napping a whole group
- * @returns {Promise<object|null>} undo info for undoNap(), or null if nothing was napped
+ * @returns {Promise<object>} undo info for undoNap(), with `count` napped and
+ *   `closedEmpty` empty tabs closed; when nothing happened, `skipped` says
+ *   which tabs were left open and why
  */
 export async function napTabs(tabIds, { intoNapId, title = '', color } = {}) {
-  // chrome.tabs.get fails for a tab that has closed meanwhile; skip those.
-  const tabs = (await Promise.all(tabIds.map((id) => chrome.tabs.get(id).catch(() => null)))).filter(
-    (tab) => tab && isNappable(tab),
-  );
-  if (tabs.length === 0) return null;
+  // chrome.tabs.get fails for a tab that has closed (or been swapped for a
+  // new one) meanwhile; those are skipped.
+  const found = await Promise.all(tabIds.map((id) => chrome.tabs.get(id).catch(() => null)));
+  const tabs = []; // saved to the nap, then closed
+  const empties = []; // empty new tabs: nothing to save, but closed along with the rest
+  const skipped = [];
+  for (const tab of found) {
+    if (tab && !tab.incognito && isEmptyTab(tab)) {
+      empties.push(tab);
+      continue;
+    }
+    const reason = tab ? whyNotNappable(tab) : 'a tab that was already gone';
+    if (reason) skipped.push(tab ? `“${tab.title}” (${reason})` : reason);
+    else tabs.push(tab);
+  }
+  if (tabs.length === 0 && empties.length === 0) return { count: 0, closedEmpty: 0, skipped };
 
-  const naps = await store();
-  const groups = await groupsOf(tabs);
-  // Save first, then close: if closing fails, the tabs are both open and saved.
-  const existing = intoNapId && (await naps.read()).some((nap) => nap.id === intoNapId);
-  const links = existing
-    ? await naps.appendLinks(intoNapId, tabs.map(toLink))
-    : (await naps.addNap({ title, color, createdAt: Date.now(), links: tabs.map(toLink) }, 0)).links;
+  // Where every closed tab was, so undoNap() can put them all back.
+  const places = await rememberPlaces([...tabs, ...empties]);
+  let links = [];
+  if (tabs.length > 0) {
+    const naps = await store();
+    // Save first, then close: if closing fails, the tabs are both open and saved.
+    const existing = intoNapId && (await naps.read()).some((nap) => nap.id === intoNapId);
+    links = existing
+      ? await naps.appendLinks(intoNapId, tabs.map(toLink))
+      : (await naps.addNap({ title, color, createdAt: Date.now(), links: tabs.map(toLink) }, 0)).links;
+  }
   // chrome.tabs.remove closes tabs; it takes one id or a list of ids.
-  await chrome.tabs.remove(tabs.map((tab) => tab.id));
+  await chrome.tabs.remove([...tabs, ...empties].map((tab) => tab.id));
 
   return {
     count: tabs.length,
+    closedEmpty: empties.length,
     linkIds: links.map((link) => link.id),
-    // Where each tab was, so undoNap() can put it back.
-    tabs: tabs.map((tab) => ({
-      url: tab.url || tab.pendingUrl,
-      windowId: tab.windowId,
-      index: tab.index,
-      pinned: tab.pinned,
-      group: groups.get(tab.groupId) ?? null,
-    })),
+    tabs: places,
   };
+}
+
+/**
+ * Naps a whole tab group, named after it and keeping its color. The group's
+ * tabs are looked up now, by group: Chrome can swap a tab for a new one (for
+ * example when Memory Saver unloads it), so ids from the last screen update
+ * may already be out of date.
+ */
+export async function napGroup(groupId, { intoNapId } = {}) {
+  // chrome.tabs.query({ groupId }) lists a group's tabs; chrome.tabGroups.get its name and color.
+  const [group, tabs] = await Promise.all([chrome.tabGroups.get(groupId), chrome.tabs.query({ groupId })]);
+  const ids = tabs.sort((a, b) => a.index - b.index).map((tab) => tab.id);
+  return napTabs(ids, intoNapId ? { intoNapId } : { title: group.title, color: group.color });
+}
+
+/**
+ * Closes tabs (the selection bar's Close). Returns undo info for undoClose(),
+ * which reopens them where they were (the pages load fresh).
+ */
+export async function closeTabs(tabIds) {
+  const tabs = (await Promise.all(tabIds.map((id) => chrome.tabs.get(id).catch(() => null)))).filter(Boolean);
+  const places = await rememberPlaces(tabs);
+  await chrome.tabs.remove(tabs.map((tab) => tab.id));
+  return { count: tabs.length, tabs: places };
+}
+
+export function undoClose(undo) {
+  return reopenTabs(undo.tabs);
+}
+
+/** Where each tab is (window, position, pin, group), for reopenTabs(). */
+async function rememberPlaces(tabs) {
+  const groups = await groupsOf(tabs);
+  return tabs.map((tab) => ({
+    url: tab.url || tab.pendingUrl,
+    windowId: tab.windowId,
+    index: tab.index,
+    pinned: tab.pinned,
+    group: groups.get(tab.groupId) ?? null,
+  }));
 }
 
 /**
@@ -311,6 +362,14 @@ export async function deleteLinks(linkIds) {
   return { before, count: linkIds.length };
 }
 
+/** Deletes every nap. Returns undo info for putBackNaps(). */
+export async function deleteAllNaps() {
+  const naps = await store();
+  const all = await naps.read();
+  for (const nap of all) await naps.removeNap(nap.id);
+  return { before: all.map((nap, index) => ({ nap, index })), count: all.reduce((sum, nap) => sum + nap.links.length, 0) };
+}
+
 /** Puts several naps back as they were (undo for deleteLinks and waking). */
 export async function putBackNaps({ before }) {
   for (const item of [...before].sort((a, b) => a.index - b.index)) await putBackNap(item);
@@ -362,9 +421,19 @@ export async function exportNaps() {
 
 // ---- Internals ----------------------------------------------------------------------------
 
-function isNappable(tab) {
+/** An empty new tab (or blank page): nothing worth saving. */
+function isEmptyTab(tab) {
+  return BLANK_PAGES.includes(tab.url || tab.pendingUrl || '');
+}
+
+/** Why a tab can't be napped, or '' if it can. */
+function whyNotNappable(tab) {
   const url = tab.url || tab.pendingUrl || '';
-  return !tab.incognito && isRestorableUrl(url) && !url.startsWith(OWN_PAGES) && !BLANK_PAGES.includes(url);
+  if (tab.incognito) return 'incognito';
+  if (url.startsWith(OWN_PAGES)) return 'Tabbies itself';
+  if (BLANK_PAGES.includes(url)) return 'an empty new tab';
+  if (!isRestorableUrl(url)) return url ? 'not a web page' : 'no address yet';
+  return '';
 }
 
 function toLink(tab) {

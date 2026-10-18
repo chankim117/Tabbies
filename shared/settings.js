@@ -28,10 +28,15 @@ export function createSettings(container, api, { onClose } = {}) {
     { class: 'settings-form' },
     section(
       'Toolbar icon',
-      'What clicking the Tabbies icon in Chrome’s toolbar opens.',
+      'What clicking the Tabbies icon in Chrome’s toolbar, or pressing its shortcut (Alt+T), opens.',
+      choice('actionOpens', 'fullTab', 'A full tab', 'Tabbies in its own tab; click again to go back to where you were'),
       choice('actionOpens', 'sidePanel', 'Side panel', 'Stays open on the right while you browse'),
       choice('actionOpens', 'popup', 'Popup', 'A small window under the icon that closes when you click away'),
-      choice('actionOpens', 'fullTab', 'A full tab', 'Tabbies in its own tab, same as Alt+T'),
+    ),
+    section(
+      'Tabbies tab',
+      null,
+      toggle('pinFullTab', 'Keep the Tabbies tab pinned', 'Pinned tabs sit small at the left of the tab strip, out of the way'),
     ),
     section(
       'Theme',
@@ -147,7 +152,7 @@ export function createSettings(container, api, { onClose } = {}) {
     const shortcuts = await api.getShortcuts();
     // Chrome reports the toolbar icon's own shortcut with no description.
     const label = ({ name, description }) =>
-      name === '_execute_action' ? 'Same as clicking the Tabbies icon' : description;
+      name === '_execute_action' ? 'Open or close Tabbies (same as clicking its icon)' : description;
     shortcutList.replaceChildren(
       ...shortcuts.flatMap(({ name, description, shortcut }) => [
         h('dt', {}, label({ name, description })),

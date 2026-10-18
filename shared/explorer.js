@@ -32,6 +32,7 @@ import { formatNapDate, napName } from './nap-data.js';
 // it's shown large, a simplified one for buttons and headings.
 const NAP_PICTURE_URL = '/icons/nap.svg';
 const NAP_ICON_URL = '/icons/nap-small.svg';
+const LAST_VIEW_KEY = 'tabbies-last-view';
 
 /**
  * Builds the explorer inside `container` and keeps it up to date.
@@ -74,8 +75,11 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
   let counts = { total: 0, shown: 0, windows: 0, searching: false }; // for the summary line
   let menuItems = []; // what each item of the open menu does
   let menuOpenerKey = null; // focus key of the button that opened the menu
+  let menuClosed = { key: null, at: 0 }; // which menu closed last, and when
+  let lastPress = { key: null, at: 0 }; // which button was last pressed, and when
   let dialogAction = null; // what the open dialog's main button does
   let toastAction = null;
+  let lastViewTimer = null;
   let toastTimer = null;
 
   let loading = false;
@@ -83,6 +87,9 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
   let staleWhileHidden = false;
   let renderQueued = false;
   let renderAfterDrag = false;
+  let renaming = false; // a name is being edited in place (see startRename)
+  let renameEndedAt = -Infinity;
+  let nameGroupWhenShown = null; // a group just made with "Group": name it once it appears
   let destroyed = false;
 
   // ---- Fixed parts of the UI ------------------------------------------------------
@@ -107,17 +114,32 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
   const napZone = h('div', { class: 'drop-zone nap-zone' }, napIcon(), 'Drop here to nap');
   const dropZones = h('div', { class: 'drop-zones', hidden: true }, newWindowZone, napZone);
 
-  // Shown under the search box while tabs are selected.
+  // Shown over the search box while tabs are selected. It covers the search
+  // row instead of pushing the tree down, so rows don't jump between the two
+  // clicks of a double-click. (Narrow views show its buttons as icons only.)
   const selectionCount = h('span', { class: 'selection-count' });
   const selectionBar = h(
     'div',
     { class: 'selection-bar', hidden: true },
     selectionCount,
-    h('button', { type: 'button', 'data-selection': 'nap', 'data-for': 'tabs' }, napIcon(), 'Nap'),
-    h('button', { type: 'button', 'data-selection': 'new-window', 'data-for': 'tabs' }, icon('newWindow'), 'New window'),
-    h('button', { type: 'button', 'data-selection': 'wake', 'data-for': 'links', title: 'Open them in this window' }, icon('wake'), 'Wake'),
-    h('button', { type: 'button', 'data-selection': 'delete', 'data-for': 'links' }, icon('close'), 'Delete'),
-    h('button', { type: 'button', 'data-selection': 'clear', title: 'Clear the selection (Esc)' }, 'Clear'),
+    h('button', { type: 'button', 'data-selection': 'nap', 'data-for': 'tabs', title: 'Nap them' }, napIcon(), h('span', { class: 'button-text' }, 'Nap')),
+    h('button', { type: 'button', 'data-selection': 'group', 'data-for': 'tabs', title: 'Put them in a new tab group' }, icon('group'), h('span', { class: 'button-text' }, 'Group')),
+    // Only shown when some selected tabs are in a group:
+    h('button', { type: 'button', 'data-selection': 'ungroup', 'data-for': 'tabs', 'data-needs': 'grouped', title: 'Take them out of their groups' }, icon('ungroup'), h('span', { class: 'button-text' }, 'Ungroup')),
+    h(
+      'button',
+      { type: 'button', 'data-selection': 'color', 'data-for': 'tabs', 'data-needs': 'grouped', 'data-focus-key': 'selection:color', 'aria-haspopup': 'menu', title: 'Change the color of their groups' },
+      icon('color'),
+      h('span', { class: 'button-text' }, 'Color'),
+    ),
+    h('button', { type: 'button', 'data-selection': 'new-window', 'data-for': 'tabs', title: 'Move them to a new window' }, icon('newWindow'), h('span', { class: 'button-text' }, 'New window')),
+    h('button', { type: 'button', class: 'danger', 'data-selection': 'close', 'data-for': 'tabs', title: 'Close them (you can undo it)' }, icon('close'), h('span', { class: 'button-text' }, 'Close')),
+    h('button', { type: 'button', 'data-selection': 'wake', 'data-for': 'links', title: 'Open them in this window' }, icon('wake'), h('span', { class: 'button-text' }, 'Wake')),
+    h('button', { type: 'button', class: 'danger', 'data-selection': 'delete', 'data-for': 'links', title: 'Delete them (you can undo it)' }, icon('close'), h('span', { class: 'button-text' }, 'Delete')),
+    // "Deselect", not "Clear" or "Cancel": it only un-selects; nothing is closed or undone.
+    // Set apart on the right, as the "never mind" button: it only unselects.
+    h('span', { class: 'selection-divider', 'aria-hidden': 'true' }),
+    h('button', { type: 'button', class: 'ghost', 'data-selection': 'deselect', title: 'Unselect them all (Esc)' }, 'Cancel'),
   );
 
   // Screen readers read out whatever is put in here (e.g. "Moved … to Window 2").
@@ -178,15 +200,40 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
   // One listener on the whole tree handles every row ("event delegation"),
   // instead of a listener per button.
   tree.addEventListener('click', onTreeClick);
+  tree.addEventListener('contextmenu', onTreeContextMenu);
   tree.addEventListener('keydown', onTreeKeydown);
   // Favicons that fail to load fall back to a globe. 'error' doesn't bubble,
   // so it is caught on the way down (capture phase).
   tree.addEventListener('error', onImageError, true);
   document.addEventListener('keydown', onDocumentKeydown);
+  document.addEventListener('click', onDocumentClick);
   document.addEventListener('visibilitychange', onVisibilityChange);
   menu.addEventListener('click', onMenuClick);
   menu.addEventListener('keydown', onMenuKeydown);
   menu.addEventListener('toggle', onMenuToggle);
+  // 'beforetoggle' fires the moment the menu starts closing (the 'toggle'
+  // event comes later, after the click that may follow), so note it here.
+  menu.addEventListener('beforetoggle', (event) => {
+    if (event.newState === 'closed') menuClosed = { key: menuOpenerKey, at: performance.now() };
+  });
+  // Remember which button a press landed on, to tell "pressed the same ⋯ to
+  // close its menu" apart from simply opening it again later.
+  container.addEventListener(
+    'pointerdown',
+    (event) => {
+      lastPress = { key: event.target.closest?.('button')?.dataset.focusKey ?? null, at: performance.now() };
+    },
+    true,
+  );
+  // The menu stays where it opened, so close it when the list scrolls away
+  // from under it or the view is resized. (`true`: also scrolling inside the
+  // popup's or side panel's own scroll area.)
+  const closeMenu = (event) => {
+    const insideMenu = event.target instanceof Node && menu.contains(event.target);
+    if (menu.matches(':popover-open') && !insideMenu) menu.hidePopover();
+  };
+  window.addEventListener('scroll', closeMenu, true);
+  window.addEventListener('resize', closeMenu);
   selectionBar.addEventListener('click', onSelectionBarClick);
   dialog.addEventListener('submit', onDialogSubmit);
   dialog.querySelector('[value="cancel"]').addEventListener('click', () => dialog.close());
@@ -220,6 +267,10 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
     },
   });
 
+  // Draw the last view right away, so a freshly opened side panel or popup
+  // isn't empty while Chrome is asked for the tabs; refresh() then brings
+  // it up to date a moment later.
+  showLastView();
   const unsubscribe = api.subscribe(refresh);
   refresh();
   if (autofocus) focusSearch();
@@ -247,6 +298,7 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
       snapshot = await api.getSnapshot();
       indexSnapshot();
       seedSelection();
+      rememberLastView();
       loadError = null;
     } catch (error) {
       console.error('Tabbies: could not read tabs', error);
@@ -277,6 +329,32 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
     }
   }
 
+  // The last view is kept in localStorage: this extension's own storage in
+  // this browser, shared by all Tabbies pages. Incognito windows are never kept.
+  function showLastView() {
+    try {
+      const last = JSON.parse(localStorage.getItem(LAST_VIEW_KEY));
+      if (!last?.windows) return;
+      snapshot = last;
+      indexSnapshot();
+      render();
+    } catch {
+      // Nothing usable saved: the first refresh fills the view instead.
+    }
+  }
+
+  function rememberLastView() {
+    clearTimeout(lastViewTimer);
+    lastViewTimer = setTimeout(() => {
+      try {
+        const windows = snapshot.windows.filter((win) => !win.incognito);
+        localStorage.setItem(LAST_VIEW_KEY, JSON.stringify({ ...snapshot, windows }));
+      } catch {
+        // Storage full or unavailable: it only makes opening a little slower.
+      }
+    }, 500);
+  }
+
   function onVisibilityChange() {
     if (!document.hidden && staleWhileHidden) {
       staleWhileHidden = false;
@@ -298,7 +376,7 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
 
   function render() {
     if (destroyed) return;
-    if (dragDrop.isDragging()) {
+    if (dragDrop.isDragging() || renaming) {
       renderAfterDrag = true;
       return;
     }
@@ -333,10 +411,16 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
       showMessage('');
     }
 
-    // Only tabs you can see stay selected (not ones closed, filtered out by
-    // the search, or inside a collapsed window or group).
+    // Only tabs still listed stay selected (not ones closed or filtered out
+    // by the search).
     pruneSelection();
     restoreFocus();
+
+    if (nameGroupWhenShown !== null && groupsById.has(nameGroupWhenShown)) {
+      const label = tree.querySelector(`.branch.group[data-group-id="${nameGroupWhenShown}"] > .row .renamable`);
+      nameGroupWhenShown = null;
+      startRename(label);
+    }
   }
 
   function updateSummary() {
@@ -352,6 +436,8 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
   }
 
   function renderWindow(win, number, ctx) {
+    // Your name for the window (⋯ → Rename window…), or its number.
+    const label = win.name || `Window ${number}`;
     const children = [];
     let shown = 0;
     for (const child of win.children) {
@@ -367,36 +453,39 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
     const activeTab = findActiveTab(win);
     const header = [
       icon('window', 'node-icon'),
-      h('span', { class: 'label' }, `Window ${number}`),
+      h(
+        'span',
+        { class: 'label renamable', 'data-placeholder': `Window ${number}`, title: win.name ? `Window ${number} · select, then click to rename` : 'Select, then click the name to rename (or F2)' },
+        label,
+      ),
       win.isCurrent && h('span', { class: 'badge badge-current', title: 'The window you opened Tabbies in' }, 'Current'),
       win.incognito && h('span', { class: 'badge' }, 'Incognito'),
       activeTab && h('span', { class: 'hint' }, activeTab.title),
       h('span', { class: 'count' }, countLabel(shown, win.tabCount, ctx)),
     ];
-    const sortButton = h(
+    const napButton = napActionButton('nap-window', `window:${win.id}:nap`, `Nap the tabs in ${label}`);
+    const menuButton = moreButton('window-menu', `window:${win.id}:menu`, `More for ${label}`);
+    const closeButton = h(
       'button',
       {
-        class: 'action sort',
+        class: 'action close',
         type: 'button',
-        'data-action': 'sort',
-        'data-window-id': win.id,
-        'data-focus-key': `window:${win.id}:sort`,
-        title: 'Sort tabs',
-        'aria-label': `Sort the tabs in Window ${number}`,
-        'aria-haspopup': 'menu',
+        'data-action': 'close-window',
+        'data-focus-key': `window:${win.id}:close`,
+        title: 'Close window (you can undo it)',
+        'aria-label': `Close ${label}`,
       },
-      icon('sort'),
+      icon('close'),
     );
-    const napButton = napActionButton('nap-window', `window:${win.id}:nap`, `Nap the tabs in Window ${number}`);
     const element = renderBranch({
       key: `window:${win.id}`,
       depth: 0,
       kind: 'window',
       header,
       children,
-      actions: [napButton, sortButton],
+      actions: [napButton, menuButton, closeButton],
       attributes: { 'data-window-id': win.id },
-      dragLabel: `Drag to merge Window ${number} into another window`,
+      dragLabel: `Drag to merge ${label} into another window`,
     });
     if (win.isCurrent) element.classList.add('is-current');
     return { element, shown };
@@ -413,7 +502,11 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
     const header = [
       h(
         'span',
-        { class: group.title ? 'group-label' : 'group-label is-unnamed' },
+        {
+          class: group.title ? 'group-label renamable' : 'group-label renamable is-unnamed',
+          'data-placeholder': 'Name this group',
+          title: 'Select, then click the name to rename (or F2)',
+        },
         group.title || 'Unnamed group',
       ),
       h('span', { class: 'count' }, countLabel(children.length, group.tabs.length, ctx)),
@@ -424,7 +517,22 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
       kind: 'group',
       header,
       children,
-      actions: [napActionButton('nap-group', `group:${group.id}:nap`, `Nap the group ${group.title || ''}`.trim())],
+      actions: [
+        napActionButton('nap-group', `group:${group.id}:nap`, `Nap the group ${group.title || ''}`.trim()),
+        moreButton('group-menu', `group:${group.id}:menu`, `More for ${groupLabel(group)}`),
+        h(
+          'button',
+          {
+            class: 'action close',
+            type: 'button',
+            'data-action': 'close-group',
+            'data-focus-key': `group:${group.id}:close`,
+            title: 'Close the group and its tabs (you can undo it)',
+            'aria-label': `Close ${groupLabel(group)}`,
+          },
+          icon('close'),
+        ),
+      ],
       attributes: { 'data-group-id': group.id, 'data-color': group.color },
       dragLabel: 'Drag to move this group',
     });
@@ -545,7 +653,7 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
     const name = napName(nap);
     const header = [
       nap.color && h('span', { class: 'nap-color', 'data-color': nap.color, title: 'Napped from a tab group' }),
-      h('span', { class: 'label nap-name' }, name),
+      h('span', { class: 'label nap-name renamable', 'data-placeholder': formatNapDate(nap.createdAt), title: 'Select, then click the name to rename (or F2)' }, name),
       nap.title && h('span', { class: 'hint' }, formatNapDate(nap.createdAt)),
       h('span', { class: 'count' }, countLabel(children.length, nap.links.length, ctx)),
     ];
@@ -593,13 +701,39 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
       return;
     }
     const { action } = button.dataset;
-
-    if (action === 'toggle') {
-      setExpanded(button, button.getAttribute('aria-expanded') !== 'true');
+    // Like files and folders on a desktop: one click selects, a double-click
+    // opens. event.detail counts the clicks in a row (2 on the second click of
+    // a double-click); it's 0 when the click came from the keyboard (Enter or
+    // Space), which opens right away. (The second click is used rather than
+    // the 'dblclick' event, which gets lost if the row is redrawn in between.)
+    const ctrl = event.ctrlKey || event.metaKey; // ⌘ on a Mac
+    const keyboard = event.detail === 0;
+    const doubleClick = event.detail === 2 && !ctrl && !event.shiftKey;
+    if (doubleClick && ['toggle', 'activate', 'wake-link'].includes(action) && !event.target.closest('.chevron')) {
+      onDoubleClick(button, action);
       return;
     }
-    if (action === 'sort') {
-      openSortMenu(button);
+
+    if (action === 'toggle') {
+      // The arrow, or Enter, folds and unfolds a window, group or nap.
+      if (keyboard || event.target.closest('.chevron')) {
+        // The Enter that saves a name could also "press" the row it hands focus
+        // back to; don't fold for that.
+        if (keyboard && performance.now() - renameEndedAt < 500) return;
+        setExpanded(button, button.getAttribute('aria-expanded') !== 'true');
+        return;
+      }
+      if (event.detail > 1) return; // the double-click does the rest
+      const row = button.closest('.row');
+      if (row.classList.contains('is-selected') && !ctrl && !event.shiftKey) {
+        // Already selected: clicking its name renames it, like a file name;
+        // clicking the rest of the row unselects it.
+        const name = event.target.closest('.renamable');
+        if (name) startRename(name, { byMouse: true });
+        else reselectBranch(row.parentElement);
+        return;
+      }
+      selectBranch(row.parentElement, { ctrl, shift: event.shiftKey });
       return;
     }
     if (action === 'nap-window') {
@@ -612,6 +746,23 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
       if (group) napGroup(group);
       return;
     }
+    if (action === 'group-menu' || action === 'close-group') {
+      const group = groupsById.get(Number(button.closest('[data-group-id]').dataset.groupId));
+      if (!group) return;
+      if (action === 'group-menu') openGroupMenu(button, group);
+      else closeGroup(group);
+      return;
+    }
+    if (action === 'close-window') {
+      const win = windowsById.get(Number(button.closest('[data-window-id]').dataset.windowId));
+      if (win) closeWindow(win);
+      return;
+    }
+    if (action === 'window-menu') {
+      const win = windowsById.get(Number(button.closest('[data-window-id]').dataset.windowId));
+      if (win) openWindowMenu(button, win);
+      return;
+    }
     if (action === 'naps-menu') {
       openNapsMenu(button);
       return;
@@ -622,12 +773,18 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
     if (nap) {
       const linkId = button.closest('[data-link-id]')?.dataset.linkId;
       if (action === 'wake-link') {
-        const ctrl = event.ctrlKey || event.metaKey;
-        if (event.shiftKey) selectLinkRange(linkId, ctrl);
-        else if (ctrl) toggleLinkSelected(linkId);
-        else {
+        if (keyboard) {
           setSelection([]);
           wake(nap, { linkIds: [linkId], where: 'here', activate: true });
+        } else if (event.detail > 1) {
+          // the double-click wakes it
+        } else if (event.shiftKey) selectLinkRange(linkId, ctrl);
+        else if (ctrl) toggleLinkSelected(linkId);
+        else if (linkSelection.has(linkId) && linkSelection.size === 1) {
+          setSelection([]); // clicking the selected link again unselects it
+        } else {
+          setSelection([]);
+          toggleLinkSelected(linkId);
         }
       }
       else if (action === 'delete-link') deleteAndOfferUndo(nap, [linkId]);
@@ -641,20 +798,136 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
     if (action === 'nap-tab') {
       napAndOfferUndo(api.napTabs([tab.id]));
     } else if (action === 'activate') {
-      const ctrl = event.ctrlKey || event.metaKey; // ⌘ on a Mac
-      if (event.shiftKey) {
-        selectRange(tab.id, ctrl); // Ctrl+Shift adds the range to the selection
-      } else if (ctrl) {
-        toggleSelected(tab.id);
-      } else {
+      if (keyboard) {
         setSelection([]);
         selectionAnchor = tab.id;
         switchTo(tab);
+      } else if (event.detail > 1) {
+        // the double-click switches to it
+      } else if (event.shiftKey) {
+        selectRange(tab.id, ctrl); // Ctrl+Shift adds the range to the selection
+      } else if (ctrl) {
+        toggleSelected(tab.id);
+      } else if (selection.has(tab.id) && selection.size === 1) {
+        setSelection([]); // clicking the selected tab again unselects it
+      } else {
+        setSelection([tab.id]);
+        selectionAnchor = tab.id;
       }
     } else if (action === 'close') {
       act(api.closeTab(tab));
     } else if (action === 'mute') {
       act(api.setTabMuted(tab, !tab.muted));
+    }
+  }
+
+  /**
+   * Right-click on a row: a menu with everything you can do with it, at the
+   * mouse. Like on a desktop, right-clicking something that isn't selected
+   * selects it first; right-clicking part of the selection acts on all of it.
+   */
+  function onTreeContextMenu(event) {
+    const row = event.target.closest('.row');
+    if (!row || renaming) return;
+    event.preventDefault(); // instead of the browser's own menu
+    const point = { x: event.clientX, y: event.clientY, key: row.querySelector('.toggle, .tab-main')?.dataset.focusKey ?? null };
+
+    if (row.matches('.tab')) {
+      const tabId = Number(row.dataset.tabId);
+      if (!selection.has(tabId)) {
+        setSelection([tabId]);
+        selectionAnchor = tabId;
+      }
+      openTabsMenu(point, selectionFor(tabId));
+      return;
+    }
+    if (row.matches('.link')) {
+      const linkId = row.dataset.linkId;
+      if (!linkSelection.has(linkId)) {
+        setSelection([]);
+        toggleLinkSelected(linkId);
+      }
+      openLinksMenu(point);
+      return;
+    }
+    const branch = row.parentElement;
+    if (!row.classList.contains('is-selected')) selectBranch(branch, { ctrl: false, shift: false });
+    if (branch.matches('.window')) {
+      const win = windowsById.get(Number(branch.dataset.windowId));
+      if (win) openWindowMenu(point, win);
+    } else if (branch.matches('.group')) {
+      const group = groupsById.get(Number(branch.dataset.groupId));
+      if (group) openGroupMenu(point, group);
+    } else if (branch.matches('.nap')) {
+      const nap = napsById.get(branch.dataset.napId);
+      if (nap) openNapMenu(point, nap);
+    } else if (branch.matches('.naps')) {
+      openNapsMenu(point);
+    }
+  }
+
+  /** The right-click menu for one tab or several selected tabs. */
+  function openTabsMenu(anchor, tabs) {
+    if (tabs.length === 0) return;
+    const one = tabs.length === 1 ? tabs[0] : null;
+    const groupIds = [...new Set(tabs.map((tab) => tab.groupId).filter((id) => id !== -1))];
+    openMenu(anchor, {
+      title: one ? one.title || one.url : `${tabs.length} tabs`,
+      items: [
+        ...(one
+          ? [{ label: 'Switch to this tab', hint: 'Or double-click it', run: () => { setSelection([]); switchTo(one); } }]
+          : []),
+        { label: 'Nap', hint: 'Close and keep for later', run: () => runTabsAction('nap', tabs) },
+        { label: one ? 'Put in a new group' : 'Group', hint: 'Then type a name for it', run: () => runTabsAction('group', tabs) },
+        ...(groupIds.length > 0
+          ? [
+              { label: 'Ungroup', hint: 'The tabs stay open', run: () => runTabsAction('ungroup', tabs) },
+              {
+                label: 'Group color',
+                swatches: GROUP_COLORS.map((color) => ({
+                  value: color,
+                  label: color,
+                  checked: groupIds.length === 1 && groupsById.get(groupIds[0])?.color === color,
+                })),
+                run: (color) => act(api.recolorGroups(groupIds, color)),
+              },
+            ]
+          : []),
+        { label: 'Move to a new window', run: () => runTabsAction('new-window', tabs) },
+        ...(one ? [{ label: one.muted ? 'Unmute' : 'Mute', run: () => act(api.setTabMuted(one, !one.muted)) }] : []),
+        { label: one ? 'Close tab' : `Close ${tabs.length} tabs`, hint: 'You can undo it', run: () => runTabsAction('close', tabs) },
+      ],
+    });
+  }
+
+  /** The right-click menu for one or more selected napped links. */
+  function openLinksMenu(anchor) {
+    const count = linkSelection.size;
+    openMenu(anchor, {
+      title: count === 1 ? linksById.get([...linkSelection][0])?.title || 'Link' : `${count} links`,
+      items: [
+        { label: 'Wake', hint: 'Open in this window', run: () => runLinksAction('wake') },
+        { label: 'Delete', hint: 'You can undo it', run: () => runLinksAction('delete') },
+      ],
+    });
+  }
+
+  /** Double-click: switch to a tab, wake a napped link, or fold/unfold a window, group or nap. */
+  function onDoubleClick(button, action) {
+    if (renaming) return;
+    if (action === 'toggle') {
+      setExpanded(button, button.getAttribute('aria-expanded') !== 'true');
+    } else if (action === 'activate') {
+      const tab = tabsById.get(Number(button.closest('[data-tab-id]').dataset.tabId));
+      if (!tab) return;
+      setSelection([]);
+      selectionAnchor = tab.id;
+      switchTo(tab);
+    } else if (action === 'wake-link') {
+      const nap = napsById.get(button.closest('[data-nap-id]')?.dataset.napId);
+      if (!nap) return;
+      setSelection([]);
+      wake(nap, { linkIds: [button.closest('[data-link-id]').dataset.linkId], where: 'here', activate: true });
     }
   }
 
@@ -675,7 +948,7 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
       }
       return;
     }
-    const where = target.newWindow ? 'a new window' : `Window ${windowNumber(target.windowId)}`;
+    const where = target.newWindow ? 'a new window' : windowLabel(target.windowId);
     if (source.kind === 'tab') {
       const what = source.items.length === 1 ? `“${source.items[0].title}”` : `${source.items.length} tabs`;
       act(api.moveTabs(source.items, target), `Moved ${what} to ${where}`);
@@ -738,6 +1011,13 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
         if (toggle && !expanded) setExpanded(toggle, true);
         else if (toggle) focusRelativeRow(row, 1);
         break;
+      case 'F2': {
+        // Rename the window, group or nap in place, like a file.
+        const name = row.querySelector('.toggle .renamable');
+        if (!name) return;
+        startRename(name);
+        break;
+      }
       case 'ArrowLeft':
         if (toggle && expanded) setExpanded(toggle, false);
         else focusParentRow(row);
@@ -756,7 +1036,7 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
       event.preventDefault();
       setQuery('');
     } else if (event.key === 'Enter') {
-      // Enter switches to the first match: Alt+T, type, Enter.
+      // Enter switches to the first match: open Tabbies, type, Enter.
       const tab = firstMatch();
       if (tab) switchTo(tab);
     } else if (event.key === 'ArrowDown') {
@@ -853,6 +1133,72 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
     showSelection();
   }
 
+  /**
+   * What a window, group or nap row stands for when it's selected: the tabs
+   * (or napped links) listed in it, collapsed or not. While searching, only
+   * the matching ones are listed.
+   */
+  function branchItems(branch) {
+    const tabIds = [...branch.querySelectorAll('.tab')].map((row) => Number(row.dataset.tabId));
+    if (tabIds.length > 0 || branch.matches('.window, .group')) return { kind: 'tabs', ids: tabIds };
+    return { kind: 'links', ids: [...branch.querySelectorAll('.link')].map((row) => row.dataset.linkId) };
+  }
+
+  /**
+   * Clicking a window, group or nap selects it, like a folder: all its tabs
+   * (or links). Ctrl+click adds it to the selection, or takes it out if it
+   * was already selected. Shift+click selects everything from the last
+   * clicked item through it (Ctrl+Shift adds that to the selection).
+   */
+  function selectBranch(branch, { ctrl, shift }) {
+    const { kind, ids } = branchItems(branch);
+    const chosen = kind === 'tabs' ? selection : linkSelection;
+    (kind === 'tabs' ? linkSelection : selection).clear();
+    if (shift && selectBranchRange(kind, ids, ctrl)) return;
+    if (!ctrl && !shift) chosen.clear();
+    const allIn = ids.length > 0 && ids.every((id) => chosen.has(id));
+    for (const id of ids) {
+      if (ctrl && !shift && allIn) chosen.delete(id);
+      else chosen.add(id);
+    }
+    if (kind === 'tabs') selectionAnchor = ids[0] ?? null;
+    else linkAnchor = ids[0] ?? null;
+    showSelection();
+  }
+
+  /**
+   * Shift+click on a window, group or nap: from the anchor (the last item
+   * clicked) to its far end, so all of it is included. Rows hidden in other
+   * collapsed groups along the way are skipped, as with Shift+click on tabs.
+   * Returns false when there is no anchor to start from.
+   */
+  function selectBranchRange(kind, ids, addToSelection) {
+    if (ids.length === 0) return false;
+    const rows = [...tree.querySelectorAll(kind === 'tabs' ? '.tab' : '.link')];
+    const order = rows.map((row) => (kind === 'tabs' ? Number(row.dataset.tabId) : row.dataset.linkId));
+    const from = order.indexOf(kind === 'tabs' ? selectionAnchor : linkAnchor);
+    if (from === -1) return false;
+    const first = order.indexOf(ids[0]);
+    const last = order.indexOf(ids.at(-1));
+    const [low, high] = from <= first ? [from, last] : [first, from];
+    const chosen = kind === 'tabs' ? selection : linkSelection;
+    const inBranch = new Set(ids);
+    if (!addToSelection) chosen.clear();
+    for (let i = low; i <= high; i++) {
+      if (inBranch.has(order[i]) || rows[i].checkVisibility()) chosen.add(order[i]);
+    }
+    showSelection();
+    return true;
+  }
+
+  /** Clicking a selected window, group or nap again: unselect it, or keep just it if more was selected. */
+  function reselectBranch(branch) {
+    const { kind, ids } = branchItems(branch);
+    const chosen = kind === 'tabs' ? selection : linkSelection;
+    if (chosen.size === ids.length) setSelection([]);
+    else selectBranch(branch, { ctrl: false, shift: false });
+  }
+
   /** Ids of the napped-link rows you can see right now, top to bottom. */
   function visibleLinkIds() {
     return visibleRows()
@@ -903,10 +1249,12 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
   }
 
   function pruneSelection() {
-    const visible = new Set(visibleTabIds());
-    for (const id of selection) if (!visible.has(id)) selection.delete(id);
-    const visibleLinks = new Set(visibleLinkIds());
-    for (const id of linkSelection) if (!visibleLinks.has(id)) linkSelection.delete(id);
+    // Rows inside a collapsed window or group are still in the tree (hidden),
+    // so a selected, collapsed window keeps its tabs selected.
+    const listed = new Set([...tree.querySelectorAll('.tab')].map((row) => Number(row.dataset.tabId)));
+    for (const id of selection) if (!listed.has(id)) selection.delete(id);
+    const listedLinks = new Set([...tree.querySelectorAll('.link')].map((row) => row.dataset.linkId));
+    for (const id of linkSelection) if (!listedLinks.has(id)) linkSelection.delete(id);
     showSelection();
   }
 
@@ -917,12 +1265,28 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
     for (const row of tree.querySelectorAll('.link')) {
       row.classList.toggle('is-selected', linkSelection.has(row.dataset.linkId));
     }
+    // A window, group or nap looks selected when everything in it is.
+    for (const branch of tree.querySelectorAll('.branch')) {
+      const { kind, ids } = branchItems(branch);
+      const chosen = kind === 'tabs' ? selection : linkSelection;
+      const whole = ids.length > 0 && ids.every((id) => chosen.has(id));
+      branch.firstElementChild.classList.toggle('is-selected', whole);
+      branch.classList.toggle('is-selected-branch', whole);
+    }
     // The bar offers what fits: Nap / New window for tabs, Wake / Delete for napped links.
     const mode = linkSelection.size > 0 ? 'links' : 'tabs';
     const count = mode === 'links' ? linkSelection.size : selection.size;
     selectionBar.hidden = count === 0;
-    selectionCount.textContent = `${plural(count, mode === 'links' ? 'link' : 'tab')} selected`;
-    for (const button of selectionBar.querySelectorAll('[data-for]')) button.hidden = button.dataset.for !== mode;
+    // "3 tabs selected"; narrow views drop the noun ("3 selected").
+    selectionCount.replaceChildren(
+      String(count),
+      h('span', { class: 'button-text' }, ` ${count === 1 ? (mode === 'links' ? 'link' : 'tab') : mode === 'links' ? 'links' : 'tabs'}`),
+      ' selected',
+    );
+    const grouped = mode === 'tabs' && selectedGroupIds().length > 0;
+    for (const button of selectionBar.querySelectorAll('[data-for]')) {
+      button.hidden = button.dataset.for !== mode || (button.dataset.needs === 'grouped' && !grouped);
+    }
     updateSummary();
   }
 
@@ -944,6 +1308,16 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
     return tabs;
   }
 
+  /** The groups that the selected tabs are in. */
+  function selectedGroupIds() {
+    const ids = new Set();
+    for (const id of selection) {
+      const groupId = tabsById.get(id)?.groupId;
+      if (groupId !== undefined && groupId !== -1) ids.add(groupId);
+    }
+    return [...ids];
+  }
+
   /** Tabs you multi-selected in Chrome's own tab strip start out selected here. */
   function seedSelection() {
     if (selectionSeeded) return;
@@ -960,15 +1334,52 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
    * Opens the shared menu under `button`.
    * items: [{ label, hint?, checked?, run() }]; checked makes it a checkbox item.
    */
-  function openMenu(button, { title, items, note }) {
+  /**
+   * Opens the popup menu under `anchor`: a button (⋯, the selection bar), or
+   * a point { x, y, key } for a right-click menu (key: the focus key of the
+   * row's button, to return focus to).
+   */
+  function openMenu(anchor, { title, items, note }) {
+    const point = anchor instanceof Element ? null : anchor;
+    const key = point ? point.key : anchor.dataset.focusKey;
+    if (!point) {
+      // Clicking the same ⋯ again closes its menu. (Pressing outside an open
+      // menu already closed it a moment ago; without this, the click that
+      // follows would open it right back up.)
+      if (menu.matches(':popover-open') && menuOpenerKey === key) {
+        menu.hidePopover();
+        return;
+      }
+      const closedByThisPress = lastPress.key === key && menuClosed.key === key && Math.abs(menuClosed.at - lastPress.at) < 400;
+      if (closedByThisPress) return;
+    }
     menuItems = items;
-    menuOpenerKey = button.dataset.focusKey;
+    menuOpenerKey = key;
     menu.setAttribute('aria-label', title);
     const footer = note ? [h('p', { class: 'menu-note' }, note)] : [];
     menu.replaceChildren(
       h('p', { class: 'menu-title' }, title),
       ...items.map((item, index) =>
-        h(
+        item.swatches
+          ? // A row of color dots (e.g. a group's color), the current one ringed.
+            h(
+              'div',
+              { class: 'menu-swatches', role: 'group', 'aria-label': item.label },
+              ...item.swatches.map((swatch) =>
+                h('button', {
+                  class: 'menu-swatch',
+                  type: 'button',
+                  role: 'menuitemradio',
+                  'aria-checked': String(swatch.checked),
+                  'aria-label': swatch.label,
+                  title: swatch.label[0].toUpperCase() + swatch.label.slice(1),
+                  'data-index': index,
+                  'data-value': swatch.value,
+                  'data-color': swatch.value,
+                }),
+              ),
+            )
+          : h(
           'button',
           {
             class: 'menu-item',
@@ -983,48 +1394,49 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
       ),
       ...footer,
     );
+    if (menu.matches(':popover-open')) menu.hidePopover(); // a right-click while one is open
     menu.showPopover();
-    // Place it under the button, flipped up if there's no room below.
-    const anchor = button.getBoundingClientRect();
+    // Under the button (lined up with its right edge), or at the mouse with
+    // the menu to its right; flipped up if there's no room below.
     const box = menu.getBoundingClientRect();
-    const left = Math.max(8, Math.min(anchor.right - box.width, innerWidth - box.width - 8));
-    let top = anchor.bottom + 4;
-    if (top + box.height > innerHeight - 8) top = Math.max(8, anchor.top - box.height - 4);
+    const at = point ? { left: point.x, right: point.x + box.width, top: point.y, bottom: point.y } : anchor.getBoundingClientRect();
+    const left = Math.max(8, Math.min(at.right - box.width, innerWidth - box.width - 8));
+    let top = at.bottom + (point ? 0 : 4);
+    if (top + box.height > innerHeight - 8) top = Math.max(8, at.top - box.height - (point ? 0 : 4));
     menu.style.left = `${left}px`;
     menu.style.top = `${top}px`;
-    menu.querySelector('.menu-item').focus();
+    menu.querySelector('.menu-item, .menu-swatch[aria-checked="true"], .menu-swatch')?.focus();
   }
 
   function onMenuClick(event) {
-    const item = event.target.closest('.menu-item');
+    const item = event.target.closest('.menu-item, .menu-swatch');
     if (!item) return;
     const { run } = menuItems[Number(item.dataset.index)];
     menu.hidePopover();
-    run();
+    run(item.dataset.value);
   }
 
   function onMenuKeydown(event) {
-    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+    if (!['ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight'].includes(event.key)) return;
     event.preventDefault();
-    const items = [...menu.querySelectorAll('.menu-item')];
+    const items = [...menu.querySelectorAll('.menu-item, .menu-swatch')];
     const index = items.indexOf(document.activeElement);
-    const step = event.key === 'ArrowDown' ? 1 : -1;
+    const step = event.key === 'ArrowDown' || event.key === 'ArrowRight' ? 1 : -1;
     items[(index + step + items.length) % items.length].focus();
   }
 
   // When the menu closes (Esc, outside click, or a choice), put keyboard
   // focus back on the button it came from, unless something else took it.
   function onMenuToggle(event) {
-    if (event.newState !== 'closed' || dialog.open) return;
+    if (event.newState !== 'closed' || dialog.open || renaming) return;
     if (menu.contains(document.activeElement) || document.activeElement === document.body) {
       const button = menuOpenerKey && tree.querySelector(`[data-focus-key="${CSS.escape(menuOpenerKey)}"]`);
       button?.focus({ preventScroll: true });
     }
   }
 
-  function openSortMenu(button) {
-    const windowId = Number(button.dataset.windowId);
-    openMenu(button, {
+  function openSortMenu(anchor, windowId) {
+    openMenu(anchor, {
       title: 'Sort this window',
       note: 'Groups stay together. Pinned tabs stay put.',
       items: SORT_ORDERS.map((order) => ({
@@ -1033,7 +1445,7 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
         run: () =>
           api.sortWindow(windowId, order.id).then(
             (previous) => {
-              const text = `Sorted Window ${windowNumber(windowId)} ${order.done}`;
+              const text = `Sorted ${windowLabel(windowId)} ${order.done}`;
               showToast(text, 'Undo', () => act(api.arrangeWindow(windowId, previous), 'Sort undone'));
             },
             (error) => {
@@ -1048,19 +1460,31 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
   // ---- Naps ---------------------------------------------------------------------------
 
   function napGroup(group, intoNapId) {
-    const options = intoNapId ? { intoNapId } : { title: group.title, color: group.color };
-    napAndOfferUndo(api.napTabs(group.tabs.map((tab) => tab.id), options));
+    napAndOfferUndo(api.napGroup(group.id, { intoNapId }));
   }
 
   /** Waits for a nap to finish, then offers to undo it. */
   function napAndOfferUndo(napping) {
+    // Say something right away, and again if Chrome takes unusually long,
+    // so a nap that stalls is never silent.
+    showToast('Napping…');
+    const slow = setTimeout(() => showToast('Still napping: Chrome hasn’t finished closing the tabs yet'), 4000);
+    napping.finally(() => clearTimeout(slow));
     napping.then(
       (undo) => {
-        if (!undo) {
-          showToast('Nothing to nap: pinned, empty and Tabbies tabs stay open');
+        if (!undo?.count && !undo?.closedEmpty) {
+          // Say which tabs were left open and why, if we know.
+          const skipped = undo?.skipped ?? [];
+          const list = skipped.slice(0, 3).join(', ') + (skipped.length > 3 ? ` and ${skipped.length - 3} more` : '');
+          showToast(skipped.length > 0 ? `Nothing to nap: ${list}` : 'Nothing to nap: pinned and Tabbies tabs stay open');
           return;
         }
-        showToast(`Napped ${plural(undo.count, 'tab')}`, 'Undo', () => act(api.undoNap(undo), 'Nap undone'));
+        // Empty new tabs are closed too, but there's nothing in them to save.
+        const empties = undo.closedEmpty ? plural(undo.closedEmpty, 'empty tab') : '';
+        const text = !undo.count
+          ? `Closed ${empties} (nothing to save)`
+          : `Napped ${plural(undo.count, 'tab')}${empties ? ` · closed ${empties}` : ''}`;
+        showToast(text, 'Undo', () => act(api.undoNap(undo), 'Nap undone'));
       },
       (error) => showError('nap', error),
     );
@@ -1089,6 +1513,183 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
     );
   }
 
+  function openWindowMenu(button, win) {
+    const label = windowLabel(win.id);
+    openMenu(button, {
+      title: label,
+      items: [
+        { label: 'Nap this window', hint: 'Same as its cat button', run: () => napAndOfferUndo(api.napWindow(win.id)) },
+        { label: 'Sort tabs…', hint: 'By site, title or when you last used them', run: () => openSortMenu(button, win.id) },
+        { label: 'Rename window', hint: 'Or click its name, or press F2', run: () => renameWindowInPlace(win.id) },
+        ...(win.name ? [{ label: 'Remove name', hint: 'Show it as a numbered window again', run: () => act(api.renameWindow(win.id, '')) }] : []),
+        {
+          label: 'Close window',
+          hint: `Closes its ${plural(win.tabCount, 'tab')}. Undo brings them back.`,
+          run: () => closeWindow(win),
+        },
+      ],
+    });
+  }
+
+  function openGroupMenu(button, group) {
+    openMenu(button, {
+      title: group.title || 'Unnamed group',
+      items: [
+        {
+          label: 'Rename group',
+          hint: 'Or click its name, or press F2',
+          run: () => startRename(tree.querySelector(`.branch.group[data-group-id="${group.id}"] > .row .renamable`)),
+        },
+        {
+          label: 'Color',
+          swatches: GROUP_COLORS.map((color) => ({ value: color, label: color, checked: color === group.color })),
+          run: (color) => act(api.recolorGroup(group.id, color)),
+        },
+        {
+          label: 'Ungroup',
+          hint: 'Keeps the tabs open, just not in a group',
+          run: () => ungroupGroup(group),
+        },
+        {
+          label: 'Close group',
+          hint: `Closes its ${plural(group.tabs.length, 'tab')}. Undo brings them back.`,
+          run: () => closeGroup(group),
+        },
+      ],
+    });
+  }
+
+  /** The color dots for one or more groups; `current` is ringed. */
+  function openColorMenu(button, groupIds, current) {
+    openMenu(button, {
+      title: groupIds.length === 1 ? 'Group color' : `Color of ${groupIds.length} groups`,
+      items: [
+        {
+          label: 'Color',
+          swatches: GROUP_COLORS.map((color) => ({ value: color, label: color, checked: color === current })),
+          run: (color) => act(api.recolorGroups(groupIds, color)),
+        },
+      ],
+    });
+  }
+
+  /** Dissolves a group (its tabs stay open), with Undo. */
+  function ungroupGroup(group) {
+    api.ungroup(group.id).then(
+      (undo) => showToast(`Ungrouped ${groupLabel(group)}`, 'Undo', () => act(api.undoUngroup(undo), 'Ungroup undone')),
+      (error) => showError('ungroup that', error),
+    );
+  }
+
+  /** Closes a group's tabs (so the group goes away), with Undo. */
+  function closeGroup(group) {
+    api.closeTabs(group.tabs.map((tab) => tab.id)).then(
+      (undo) => showToast(`Closed ${groupLabel(group)}`, 'Undo', () => act(api.undoClose(undo), 'Close undone')),
+      (error) => showError('close that group', error),
+    );
+  }
+
+  /** Closes all of a window's tabs (so the window closes), with Undo. */
+  function closeWindow(win) {
+    const label = windowLabel(win.id);
+    api.closeTabs([...tabsIn(win)].map((tab) => tab.id)).then(
+      (undo) => showToast(`Closed ${label}`, 'Undo', () => act(api.undoClose(undo), 'Close undone')),
+      (error) => showError('close that window', error),
+    );
+  }
+
+  function renameWindowInPlace(windowId) {
+    startRename(tree.querySelector(`.branch.window[data-window-id="${windowId}"] > .row .renamable`));
+  }
+
+  /**
+   * Edits a window's or nap's name right where it is, like renaming a file:
+   * Enter or clicking away saves, Esc cancels, an empty name goes back to the
+   * default ("Window 2", or the nap's date).
+   */
+  function startRename(label, { byMouse = false } = {}) {
+    if (!label || renaming) return;
+    const row = label.closest('.row');
+    const branch = row.parentElement;
+    const kind = branch.matches('.window') ? 'window' : branch.matches('.group') ? 'group' : 'nap';
+    const item =
+      kind === 'window'
+        ? windowsById.get(Number(branch.dataset.windowId))
+        : kind === 'group'
+          ? groupsById.get(Number(branch.dataset.groupId))
+          : napsById.get(branch.dataset.napId);
+    if (!item) return;
+    const current = (kind === 'window' ? item.name : item.title) ?? '';
+
+    renaming = true;
+    const input = h('input', {
+      class: 'rename-input',
+      type: 'text',
+      value: current,
+      placeholder: label.dataset.placeholder,
+      spellcheck: 'false',
+      'aria-label': { window: 'Window name', group: 'Group name', nap: 'Nap name' }[kind],
+    });
+    // Lay the text box exactly over the name, in the same font.
+    const rowBox = row.getBoundingClientRect();
+    const box = label.getBoundingClientRect();
+    input.style.font = getComputedStyle(label).font;
+    input.style.fontStyle = 'normal'; // not the italic of "Unnamed group"
+    input.style.left = `${box.left - rowBox.left}px`;
+    input.style.width = `${Math.max(box.width + 48, 200)}px`;
+    row.append(input);
+    label.style.visibility = 'hidden';
+    row.draggable = false; // so selecting text in the box doesn't drag the row
+    input.focus();
+    input.select();
+
+    let finished = false;
+    const finish = (save) => {
+      if (finished) return;
+      finished = true;
+      const value = input.value.trim();
+      input.remove();
+      label.style.visibility = '';
+      row.draggable = true;
+      renaming = false;
+      renameEndedAt = performance.now();
+      row.querySelector('.toggle')?.focus({ preventScroll: true });
+      if (save && value !== current) {
+        const rename = { window: api.renameWindow, group: api.renameGroup, nap: api.renameNap }[kind];
+        act(rename(item.id, value));
+      } else if (renderAfterDrag) {
+        renderAfterDrag = false;
+        render();
+      }
+    };
+    input.addEventListener('keydown', (event) => {
+      event.stopPropagation(); // keep arrows, Esc, "/" etc. for the text box
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        finish(true);
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        finish(false);
+      }
+    });
+    input.addEventListener('blur', () => {
+      // The page itself lost focus (you switched windows, or Chrome showed a
+      // popup such as its tab-groups tip): keep the name box, and type on
+      // when you come back.
+      if (!document.hasFocus()) {
+        window.addEventListener('focus', () => finished || input.focus(), { once: true });
+        return;
+      }
+      finish(true);
+    });
+    // A rename started by clicking the name also ends when the mouse leaves
+    // the row, keeping what was typed (like clicking away). One started any
+    // other way (F2, a menu, a new group) only ends with Enter, Esc or
+    // clicking away, wherever the mouse is.
+    if (byMouse) row.addEventListener('mouseleave', () => finish(true), { once: true });
+    input.addEventListener('click', (event) => event.stopPropagation());
+  }
+
   function openNapMenu(button, nap) {
     openMenu(button, {
       title: napName(nap),
@@ -1096,7 +1697,7 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
         { label: 'Wake here', hint: 'Open the tabs in this window', run: () => wake(nap, { where: 'here' }) },
         { label: 'Wake as a group', hint: 'Open them as one tab group', run: () => wake(nap, { where: 'group' }) },
         { label: 'Wake in a new window', run: () => wake(nap, { where: 'window' }) },
-        { label: 'Rename…', run: () => renameDialog(nap) },
+        { label: 'Rename', hint: 'Or click its name', run: () => startRename(tree.querySelector(`.branch.nap[data-nap-id="${nap.id}"] > .row .renamable`)) },
         { label: 'Delete', hint: `Forget these ${plural(nap.links.length, 'link')}`, run: () => deleteAndOfferUndo(nap) },
       ],
     });
@@ -1114,6 +1715,7 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
         },
         { label: 'Import links…', run: importDialog },
         { label: 'Export links…', run: exportDialog },
+        ...(snapshot?.naps.length ? [{ label: 'Delete all naps…', hint: 'Asks first; you can undo it', run: deleteAllDialog }] : []),
         {
           label: 'Keep links after waking',
           hint: 'Waking opens tabs but leaves the nap as it is',
@@ -1155,13 +1757,17 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
     dialogAction = null;
   }
 
-  function renameDialog(nap) {
+  function deleteAllDialog() {
+    const links = snapshot.naps.reduce((sum, nap) => sum + nap.links.length, 0);
     openDialog({
-      title: 'Rename nap',
-      input: { value: nap.title, placeholder: formatNapDate(nap.createdAt) },
-      text: 'Leave it empty to name it by its date again.',
-      confirmLabel: 'Rename',
-      onConfirm: (value) => act(api.renameNap(nap.id, value.trim())),
+      title: 'Delete all naps?',
+      text: `This deletes all ${plural(links, 'link')} in ${plural(snapshot.naps.length, 'nap')}. You can undo it right after, from the message at the bottom.`,
+      confirmLabel: 'Delete all',
+      onConfirm: () =>
+        api.deleteAllNaps().then(
+          (undo) => showToast(`Deleted ${plural(undo.count, 'link')}`, 'Undo', () => act(api.putBackNaps(undo), 'Delete undone')),
+          (error) => showError('delete the naps', error),
+        ),
     });
   }
 
@@ -1206,30 +1812,67 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
 
   // ---- Selection bar ------------------------------------------------------------------
 
+  /** Clicking anywhere that isn't a row (or the bar, a menu, …) unselects everything, like on a desktop. */
+  function onDocumentClick(event) {
+    if (selection.size === 0 && linkSelection.size === 0) return;
+    if (!(event.target instanceof Element)) return;
+    if (event.target.closest('.row, .selection-bar, .menu, .dialog, .toast, .rename-input')) return;
+    setSelection([]);
+  }
+
   function onSelectionBarClick(event) {
     const button = event.target.closest('[data-selection]');
     if (!button) return;
     const action = button.dataset.selection;
-    if (action === 'wake' || action === 'delete') {
-      const ids = [...linksById.keys()].filter((id) => linkSelection.has(id)); // in list order
-      setSelection([]);
-      if (action === 'wake') moveNapped({ kind: 'links', items: ids.map((id) => linksById.get(id)) }, {});
-      else {
-        api.deleteLinks(ids).then(
-          (undo) => showToast(`Deleted ${plural(undo.count, 'link')}`, 'Undo', () => act(api.putBackNaps(undo), 'Delete undone')),
-          (error) => showError('delete those', error),
-        );
-      }
-      return;
+    if (action === 'wake' || action === 'delete') runLinksAction(action);
+    else if (action === 'color') {
+      const groupIds = selectedGroupIds();
+      openColorMenu(button, groupIds, groupIds.length === 1 ? groupsById.get(groupIds[0])?.color : null);
+    } else if (action === 'deselect') setSelection([]);
+    else runTabsAction(action, selectionFor([...selection][0] ?? -1));
+  }
+
+  function runLinksAction(action) {
+    const ids = [...linksById.keys()].filter((id) => linkSelection.has(id)); // in list order
+    setSelection([]);
+    if (action === 'wake') moveNapped({ kind: 'links', items: ids.map((id) => linksById.get(id)) }, {});
+    else {
+      api.deleteLinks(ids).then(
+        (undo) => showToast(`Deleted ${plural(undo.count, 'link')}`, 'Undo', () => act(api.putBackNaps(undo), 'Delete undone')),
+        (error) => showError('delete those', error),
+      );
     }
-    const tabs = selectionFor([...selection][0] ?? -1);
-    if (button.dataset.selection === 'nap') {
+  }
+
+  /** Nap, Group, Ungroup, New window or Close for some tabs (the selection bar and the right-click menu). */
+  function runTabsAction(action, tabs) {
+    if (action === 'nap') {
       napAndOfferUndo(api.napTabs(tabs.map((tab) => tab.id)));
       setSelection([]);
-    } else if (button.dataset.selection === 'new-window') {
-      act(api.moveTabs(tabs, { newWindow: true }), `Moved ${plural(tabs.length, 'tab')} to a new window`);
-    } else {
+    } else if (action === 'group') {
       setSelection([]);
+      api.groupTabs(tabs).then(
+        (undo) => {
+          if (!undo) return;
+          nameGroupWhenShown = undo.groupId; // type a name for it right away (Enter or Esc to skip)
+          showToast(`Grouped ${plural(undo.count, 'tab')}`, 'Undo', () => act(api.undoGroup(undo), 'Group undone'));
+        },
+        (error) => showError('group those', error),
+      );
+    } else if (action === 'ungroup') {
+      setSelection([]);
+      api.ungroupTabs(tabs.map((tab) => tab.id)).then(
+        (undo) => showToast(`Took ${plural(undo.count, 'tab')} out of ${plural(undo.groups.length, 'group')}`, 'Undo', () => act(api.undoUngroup(undo), 'Ungroup undone')),
+        (error) => showError('ungroup those', error),
+      );
+    } else if (action === 'new-window') {
+      act(api.moveTabs(tabs, { newWindow: true }), `Moved ${plural(tabs.length, 'tab')} to a new window`);
+    } else if (action === 'close') {
+      setSelection([]);
+      api.closeTabs(tabs.map((tab) => tab.id)).then(
+        (undo) => showToast(`Closed ${plural(undo.count, 'tab')}`, 'Undo', () => act(api.undoClose(undo), 'Close undone')),
+        (error) => showError('close those', error),
+      );
     }
   }
 
@@ -1258,8 +1901,10 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
     return null;
   }
 
-  function windowNumber(windowId) {
-    return (snapshot?.windows.findIndex((win) => win.id === windowId) ?? -1) + 1;
+  /** "Work" if you named the window, otherwise "Window 2". */
+  function windowLabel(windowId) {
+    const index = snapshot?.windows.findIndex((win) => win.id === windowId) ?? -1;
+    return snapshot?.windows[index]?.name || `Window ${index + 1}`;
   }
 
   /** Runs a Chrome action; on success optionally announces `message`. */
@@ -1338,6 +1983,7 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
     clearTimeout(toastTimer);
     unsubscribe();
     document.removeEventListener('keydown', onDocumentKeydown);
+    document.removeEventListener('click', onDocumentClick);
     document.removeEventListener('visibilitychange', onVisibilityChange);
     container.replaceChildren();
     container.classList.remove('explorer');
@@ -1375,18 +2021,21 @@ function buildTabRow(tab, depth) {
       status.length > 0 && h('span', { class: 'status' }, ...status),
       h('span', { class: 'domain' }, displayUrl(tab.url)),
     ),
-    h(
-      'button',
-      {
-        class: 'action',
-        type: 'button',
-        'data-action': 'mute',
-        'data-focus-key': `tab:${tab.id}:mute`,
-        title: tab.muted ? 'Unmute tab' : 'Mute tab',
-        'aria-label': `${tab.muted ? 'Unmute' : 'Mute'} ${tab.title}`,
-      },
-      icon(tab.muted ? 'sound' : 'muted'),
-    ),
+    // Mute/unmute only on tabs that play sound (or were muted); the rest
+    // have it in the right-click menu.
+    (tab.audible || tab.muted) &&
+      h(
+        'button',
+        {
+          class: 'action',
+          type: 'button',
+          'data-action': 'mute',
+          'data-focus-key': `tab:${tab.id}:mute`,
+          title: tab.muted ? 'Unmute tab' : 'Mute tab',
+          'aria-label': `${tab.muted ? 'Unmute' : 'Mute'} ${tab.title}`,
+        },
+        icon(tab.muted ? 'sound' : 'muted'),
+      ),
     napActionButton('nap-tab', `tab:${tab.id}:nap`, `Nap ${tab.title}`),
     h(
       'button',
@@ -1458,6 +2107,14 @@ function napActionButton(action, focusKey, label) {
 }
 
 /** A ⋯ button that opens a menu. */
+/** The colors Chrome allows for tab groups, in the order Chrome shows them. */
+const GROUP_COLORS = ['grey', 'blue', 'red', 'yellow', 'green', 'pink', 'purple', 'cyan', 'orange'];
+
+/** "the group Reading", or "the unnamed group". */
+function groupLabel(group) {
+  return group.title ? `the group ${group.title}` : 'the unnamed group';
+}
+
 function moreButton(action, focusKey, label) {
   return h(
     'button',

@@ -13,6 +13,10 @@
 //   closeTab(tab)                     → Promise
 //   setTabMuted(tab, muted)           → Promise
 //   moveTabs(tabs, target)            → Promise            see MoveTarget below
+//   groupTabs(tabs)                   → Promise<undo>      puts tabs in a new tab group
+//   undoGroup(undo), renameGroup(groupId, title), recolorGroup(groupId, color)
+//   ungroup(groupId), ungroupTabs(tabIds) → Promise<undo>  for undoUngroup()
+//   recolorGroups(groupIds, color)
 //   moveGroup(group, target)          → Promise
 //   mergeWindow(window, intoWindowId) → Promise
 //   sortWindow(windowId, orderId)     → Promise<Layout>    returns the old order, for Undo
@@ -21,7 +25,7 @@
 //
 // Used by the views and background.js:
 //   openFullTab(fromWindowId), openSidePanel(windowId), getCurrentWindowId(),
-//   getOpenTabbiesShortcut()
+//   getShortcut(commandName)
 //
 // Data shapes (plain objects, not chrome.tabs.Tab):
 //
@@ -128,13 +132,96 @@ export async function getSnapshot() {
   ]);
 
   const groupsById = new Map(groups.map((group) => [group.id, group]));
+  const shown = windows.filter((win) => incognitoAllowed || !win.incognito);
+  const names = await windowNamesFor(shown);
   return {
-    windows: windows
-      .filter((win) => incognitoAllowed || !win.incognito)
-      .map((win) => toWindowNode(win, groupsById, currentWindowId)),
+    windows: shown.map((win) => ({ ...toWindowNode(win, groupsById, currentWindowId), name: names.get(win.id) ?? '' })),
     naps,
     settings,
   };
+}
+
+// ---- Window names ---------------------------------------------------------------------------
+//
+// Chrome doesn't let extensions read or set the names from its own "Name
+// window…" menu, so Tabbies keeps its own, in chrome.storage.local:
+//   windowNames: { [windowId]: { name, urls, seen } }
+// Window ids change every time Chrome restarts. So each name also remembers
+// its window's tab addresses, and a window Tabbies doesn't know yet gets the
+// name whose addresses match its tabs best (at least half of them). After a
+// restart, Chrome brings the same tabs back, so the names follow.
+
+const NAME_MATCH = 0.5; // share of tabs that must match to reattach a name
+const NAME_KEEP_DAYS = 30; // names of windows not seen for this long are forgotten
+
+/** Sets (or, with '', removes) the name of a window. */
+export async function renameWindow(windowId, name) {
+  const { windowNames = {} } = await chrome.storage.local.get('windowNames');
+  if (name) {
+    const tabs = await windowTabs(windowId);
+    windowNames[windowId] = { name, urls: tabs.map(tabUrl).slice(0, 100), seen: Date.now() };
+  } else {
+    delete windowNames[windowId];
+  }
+  await chrome.storage.local.set({ windowNames });
+}
+
+/** Map of window id → name, for the given (open) windows. */
+async function windowNamesFor(windows) {
+  const { windowNames: stored = {} } = await chrome.storage.local.get('windowNames');
+  // Skip anything damaged (no name, or no list of addresses) rather than fail.
+  const windowNames = Object.fromEntries(
+    Object.entries(stored).filter(([, entry]) => entry && typeof entry.name === 'string' && entry.name && Array.isArray(entry.urls)),
+  );
+  let changed = Object.keys(windowNames).length !== Object.keys(stored).length;
+  const open = new Set(windows.map((win) => String(win.id)));
+  // Names whose window isn't open: closed, or from before a restart.
+  const unclaimed = new Map(Object.entries(windowNames).filter(([id]) => !open.has(id)));
+  const names = new Map();
+
+  for (const win of windows) {
+    const urls = (win.tabs ?? []).map(tabUrl).slice(0, 100);
+    let entry = windowNames[win.id];
+    if (!entry) {
+      // Is this a named window from before Chrome restarted?
+      let bestId = null;
+      let bestScore = NAME_MATCH;
+      for (const [id, old] of unclaimed) {
+        const score = overlap(urls, old.urls);
+        if (score >= bestScore) [bestId, bestScore] = [id, score];
+      }
+      if (bestId === null) continue;
+      entry = unclaimed.get(bestId);
+      unclaimed.delete(bestId);
+      delete windowNames[bestId];
+      changed = true;
+    }
+    names.set(win.id, entry.name);
+    // Keep its addresses up to date for the next restart.
+    if (urls.join('\n') !== entry.urls.join('\n') || windowNames[win.id] !== entry) changed = true;
+    windowNames[win.id] = { name: entry.name, urls, seen: Date.now() };
+  }
+
+  // Forget names of windows that haven't been around for a long time.
+  for (const [id, entry] of unclaimed) {
+    if (Date.now() - (entry.seen ?? 0) > NAME_KEEP_DAYS * 86_400_000) {
+      delete windowNames[id];
+      changed = true;
+    }
+  }
+  if (changed) await chrome.storage.local.set({ windowNames });
+  return names;
+}
+
+function tabUrl(tab) {
+  return tab.url || tab.pendingUrl || '';
+}
+
+/** Share of addresses two windows have in common: 0 (none) to 1 (all). */
+function overlap(a, b) {
+  if (a.length === 0 || b.length === 0) return 0;
+  const set = new Set(b);
+  return a.filter((url) => set.has(url)).length / Math.max(a.length, b.length);
 }
 
 /**
@@ -167,7 +254,9 @@ export function subscribe(onChange) {
   // chrome.storage.sync changes can also arrive from another computer.
   const storageChanged = (changes, areaName) => {
     if (areaName === 'sync' && 'settings' in changes) changed();
-    if (areaName === 'local' && ('naps' in changes || 'deviceSettings' in changes || 'napIcons' in changes)) changed();
+    if (areaName === 'local' && ['naps', 'deviceSettings', 'napIcons', 'windowNames'].some((key) => key in changes)) {
+      changed();
+    }
   };
 
   // While naps sync through bookmarks, bookmark changes (here, or arriving
@@ -348,6 +437,144 @@ async function addToGroup(tabId, groupId) {
   });
   // ...and chrome.tabs.group with `groupId` then adds it to that group.
   await chrome.tabs.group({ groupId, tabIds: [tabId] });
+}
+
+/**
+ * Puts tabs (e.g. a Ctrl/Shift-click selection) into a new, unnamed tab group,
+ * gathered next to the first one, in its window, in the order given. Pinned
+ * tabs get unpinned, as Chrome doesn't allow pinned tabs in groups.
+ * @param {TabNode[]} tabs
+ * @returns {Promise<object|null>} { groupId, count, places } for undoGroup()
+ */
+export async function groupTabs(tabs) {
+  // Read the tabs fresh: they may have moved since the explorer's snapshot.
+  const fresh = (await Promise.all(tabs.map((tab) => chrome.tabs.get(tab.id).catch(() => null)))).filter(Boolean);
+  if (fresh.length === 0) return null;
+  const [first] = fresh;
+  // Tabs can't move between incognito and regular windows.
+  const together = fresh.filter((tab) => tab.incognito === first.incognito);
+  const places = together.map((tab) => ({
+    id: tab.id,
+    windowId: tab.windowId,
+    index: tab.index,
+    pinned: tab.pinned,
+    groupId: tab.groupId,
+  }));
+
+  let groupId;
+  await keepingActiveTab(first.windowId, async () => {
+    for (const tab of together) {
+      if (tab.pinned) await chrome.tabs.update(tab.id, { pinned: false });
+    }
+    // Line the others up right after the first tab...
+    let afterTabId = first.id;
+    for (const tab of together.slice(1)) {
+      await moveOneTab({ ...tab, pinned: false }, { windowId: first.windowId, afterTabId });
+      afterTabId = tab.id;
+    }
+    // ...then chrome.tabs.group (no groupId) makes a new group of them and
+    // returns its id. Chrome picks the group's color.
+    groupId = await chrome.tabs.group({ tabIds: together.map((tab) => tab.id) });
+  });
+  return { groupId, count: together.length, places };
+}
+
+/** Reverses groupTabs(): takes the tabs out of the group and puts each back where it was. */
+export async function undoGroup(undo) {
+  const alive = (await Promise.all(undo.places.map((place) => chrome.tabs.get(place.id).catch(() => null)))).filter(Boolean);
+  const aliveIds = new Set(alive.map((tab) => tab.id));
+  if (aliveIds.size === 0) return;
+  // chrome.tabs.ungroup takes tabs out of their group (an emptied group disappears).
+  await chrome.tabs.ungroup([...aliveIds]);
+
+  const windowIds = new Set((await chrome.windows.getAll()).map((win) => win.id));
+  const newWindowFor = new Map(); // a window that has closed since → its replacement
+  // Lowest positions first, so each move leaves the earlier ones in place.
+  const places = undo.places.filter((place) => aliveIds.has(place.id)).sort((a, b) => a.index - b.index);
+  for (const place of places) {
+    let windowId = windowIds.has(place.windowId) ? place.windowId : newWindowFor.get(place.windowId);
+    if (windowId === undefined) {
+      // All of that window's tabs were grouped away, so Chrome closed it.
+      windowId = (await chrome.windows.create({ tabId: place.id, focused: false })).id;
+      newWindowFor.set(place.windowId, windowId);
+    }
+    if (place.pinned) await chrome.tabs.update(place.id, { pinned: true });
+    const groupStillThere = place.groupId !== NO_GROUP && (await chrome.tabGroups.get(place.groupId).catch(() => null));
+    if (groupStillThere) {
+      await addToGroup(place.id, place.groupId);
+      await chrome.tabs.move(place.id, { index: place.index }).catch(() => {});
+    } else {
+      // A spot inside someone else's group is refused; the tab then stays near by.
+      await chrome.tabs.move(place.id, { windowId, index: place.index }).catch(() => {});
+    }
+  }
+}
+
+/** Sets a tab group's name ('' for none). chrome.tabGroups.update changes a group's title or color. */
+export async function renameGroup(groupId, title) {
+  await chrome.tabGroups.update(groupId, { title });
+}
+
+/** Sets a tab group's color: grey, blue, red, yellow, green, pink, purple, cyan or orange. */
+export async function recolorGroup(groupId, color) {
+  await chrome.tabGroups.update(groupId, { color });
+}
+
+/** Sets the color of several tab groups at once (e.g. the groups of the selected tabs). */
+export async function recolorGroups(groupIds, color) {
+  for (const groupId of groupIds) await chrome.tabGroups.update(groupId, { color });
+}
+
+/** Dissolves a tab group: its tabs stay open where they are, just not grouped. */
+export async function ungroup(groupId) {
+  // chrome.tabs.query with `groupId` lists the tabs of one group.
+  return ungroupTabs((await chrome.tabs.query({ groupId })).map((tab) => tab.id));
+}
+
+/**
+ * Takes tabs out of their groups (tabs not in a group are left alone). A group
+ * that loses all its tabs disappears.
+ * @returns {Promise<object>} { count, groups } for undoUngroup()
+ */
+export async function ungroupTabs(tabIds) {
+  const tabs = (await Promise.all(tabIds.map((id) => chrome.tabs.get(id).catch(() => null))))
+    .filter((tab) => tab && tab.groupId !== NO_GROUP)
+    .sort((a, b) => a.index - b.index);
+  if (tabs.length === 0) return { count: 0, groups: [] };
+  // Remember each group's name and color, and where each tab was, for Undo.
+  // chrome.tabGroups.get returns a group's title and color.
+  const groups = new Map();
+  for (const tab of tabs) {
+    if (!groups.has(tab.groupId)) {
+      const group = await chrome.tabGroups.get(tab.groupId);
+      groups.set(tab.groupId, { groupId: tab.groupId, title: group.title, color: group.color, tabs: [] });
+    }
+    groups.get(tab.groupId).tabs.push({ id: tab.id, index: tab.index });
+  }
+  // chrome.tabs.ungroup takes tabs out of their group. Chrome moves a tab
+  // from the middle of a group to just outside it.
+  await chrome.tabs.ungroup(tabs.map((tab) => tab.id));
+  return { count: tabs.length, groups: [...groups.values()] };
+}
+
+/** Reverses ungroupTabs(): back into the same group, or a new one with the same name and color. */
+export async function undoUngroup(undo) {
+  for (const group of undo.groups) {
+    const alive = (await Promise.all(group.tabs.map((t) => chrome.tabs.get(t.id).catch(() => null)))).filter(Boolean);
+    if (alive.length === 0) continue;
+    const stillThere = await chrome.tabGroups.get(group.groupId).catch(() => null);
+    if (stillThere) {
+      // Only some of its tabs were taken out: put each back in its old spot.
+      for (const saved of group.tabs) {
+        if (!alive.some((tab) => tab.id === saved.id)) continue;
+        await addToGroup(saved.id, group.groupId);
+        await chrome.tabs.move(saved.id, { index: saved.index }).catch(() => {});
+      }
+    } else {
+      const groupId = await chrome.tabs.group({ tabIds: alive.map((tab) => tab.id) });
+      await chrome.tabGroups.update(groupId, { title: group.title, color: group.color });
+    }
+  }
 }
 
 /**
@@ -536,13 +763,13 @@ let openFullTabInFlight = null;
 
 /**
  * Switches to the Tabbies tab if one is open, otherwise opens one in the given
- * window (or the best regular window). Used by the Alt+T shortcut and the
+ * window (or the best regular window). Used by the "Open Tabbies in a tab" shortcut and the
  * "open in a tab" buttons.
  */
-export function openFullTab(fromWindowId) {
-  // Pressing Alt+T twice quickly could otherwise run two lookups at once and
+export function openFullTab(fromWindowId, { toggle = false } = {}) {
+  // Pressing the shortcut twice quickly could otherwise run two lookups at once and
   // open two Tabbies tabs, so overlapping calls share one in-flight promise.
-  openFullTabInFlight ??= focusOrCreateFullTab(fromWindowId).finally(() => {
+  openFullTabInFlight ??= focusOrCreateFullTab(fromWindowId, toggle).finally(() => {
     openFullTabInFlight = null;
   });
   return openFullTabInFlight;
@@ -558,22 +785,62 @@ export function openSidePanel(windowId) {
   return chrome.sidePanel.open({ windowId });
 }
 
-/**
- * Returns the key currently assigned to the "Open Tabbies" command, e.g.
- * "Alt+T", or '' if none. chrome.commands.getAll reports what the user really
- * has: the key can be changed at chrome://extensions/shortcuts, and it is left
- * empty when another extension already uses it.
- */
-export async function getOpenTabbiesShortcut() {
-  const commands = await chrome.commands.getAll();
-  return commands.find((command) => command.name === 'open-tabbies')?.shortcut ?? '';
+/** Closes Tabbies' side panel in that window, if it's open there. */
+export async function closeSidePanel(windowId) {
+  // chrome.sidePanel.close (Chrome 141+) closes the extension's side panel;
+  // it fails when the panel isn't open, which is fine here.
+  await chrome.sidePanel.close?.({ windowId }).catch(() => {});
 }
 
-async function focusOrCreateFullTab(fromWindowId) {
+/**
+ * The key currently assigned to one of the "commands" in manifest.json, e.g.
+ * "Alt+T", or '' if none. chrome.commands.getAll reports what the user really
+ * has: keys can be changed at chrome://extensions/shortcuts, and a suggested
+ * key is left empty when another extension already uses it.
+ */
+export async function getShortcut(commandName) {
+  const commands = await chrome.commands.getAll();
+  return commands.find((command) => command.name === commandName)?.shortcut ?? '';
+}
+
+/**
+ * Pins or unpins every open Tabbies tab to match Settings → "Keep the Tabbies
+ * tab pinned". background.js calls this when the setting changes.
+ */
+export async function applyFullTabPin(settings) {
+  const { pinFullTab } = settings ?? (await readSettings());
+  const tabs = (await chrome.tabs.query({})).filter((tab) => (tab.url || tab.pendingUrl || '').startsWith(TABBIES_URL));
+  for (const tab of tabs) {
+    // chrome.tabs.update with `pinned` pins or unpins a tab.
+    if (tab.pinned !== pinFullTab) await chrome.tabs.update(tab.id, { pinned: pinFullTab });
+  }
+}
+
+async function focusOrCreateFullTab(fromWindowId, toggle) {
   // chrome.tabs.query({}) returns every tab in every window. A tab that hasn't
   // finished its first navigation has its address in `pendingUrl`, not `url`.
   const allTabs = await chrome.tabs.query({});
-  const existing = allTabs.filter((tab) => (tab.url || tab.pendingUrl || '').startsWith(TABBIES_URL));
+  const isTabbies = (tab) => (tab.url || tab.pendingUrl || '').startsWith(TABBIES_URL);
+  const existing = allTabs.filter(isTabbies);
+
+  // Clicking the icon (or Alt+T) while already looking at Tabbies "closes" it:
+  // you go back to the tab you came from. chrome.storage.session keeps that
+  // tab's id until Chrome quits (it survives the background script sleeping).
+  const here = allTabs.find((tab) => tab.windowId === fromWindowId && tab.active);
+  if (toggle && here && isTabbies(here)) {
+    const { tabbiesCameFrom } = await chrome.storage.session.get('tabbiesCameFrom');
+    const previous =
+      allTabs.find((tab) => tab.id === tabbiesCameFrom) ??
+      // Otherwise the tab used most recently: `lastAccessed` is when a tab
+      // was last the active one (milliseconds, Chrome 121+).
+      allTabs
+        .filter((tab) => tab.windowId === fromWindowId && !isTabbies(tab))
+        .sort((x, y) => (y.lastAccessed ?? 0) - (x.lastAccessed ?? 0))[0];
+    if (previous) await activateTab(previous);
+    return;
+  }
+  if (here && !isTabbies(here)) await chrome.storage.session.set({ tabbiesCameFrom: here.id });
+
   if (existing.length > 0) {
     // Prefer a Tabbies tab in the window the user is in, otherwise the first one.
     const tab = existing.find((t) => t.windowId === fromWindowId) ?? existing[0];
@@ -594,7 +861,9 @@ async function focusOrCreateFullTab(fromWindowId) {
     return;
   }
   // chrome.tabs.create opens a new tab; `active: true` selects it.
-  const tab = await chrome.tabs.create({ windowId: target.id, url: TABBIES_URL, active: true });
+  // Pinned right away if Settings → "Keep the Tabbies tab pinned" is on.
+  const { pinFullTab } = await readSettings();
+  const tab = await chrome.tabs.create({ windowId: target.id, url: TABBIES_URL, active: true, pinned: pinFullTab });
   await activateTab(tab);
 }
 

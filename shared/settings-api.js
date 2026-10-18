@@ -13,13 +13,15 @@ const DEVICE_SETTINGS = ['syncNaps'];
 /** @typedef {typeof DEFAULT_SETTINGS} Settings */
 export const DEFAULT_SETTINGS = {
   /** What clicking the Tabbies toolbar icon opens: 'sidePanel' | 'popup' | 'fullTab'. */
-  actionOpens: 'sidePanel',
+  actionOpens: 'fullTab',
   /** 'system' follows the computer's light/dark setting; or 'light' | 'dark'. */
   theme: 'system',
   /** Waking a nap opens its tabs but leaves the nap as it is. */
   keepAfterWaking: false,
   /** Napping a whole window (or every window) includes pinned tabs. */
   napPinned: false,
+  /** The full Tabbies tab is kept pinned (at the left of the tab strip, small). */
+  pinFullTab: false,
   /** Keep naps in a synced bookmarks folder (this computer only; needs the bookmarks permission). */
   syncNaps: false,
 };
@@ -41,8 +43,15 @@ export async function readSettings() {
 
 /** Saves some settings, e.g. saveSettings({ theme: 'dark' }). */
 export async function saveSettings(changes) {
-  const current = await readSettings();
-  const next = { ...current, ...changes };
+  await readSettings(); // first moves settings from older versions into place
+  // Only settings someone actually picked are stored (not the defaults), so
+  // if a default changes in a later version, it reaches everyone who never
+  // chose that setting.
+  const [{ settings: storedSettings }, { deviceSettings: storedDevice }] = await Promise.all([
+    chrome.storage.sync.get('settings'),
+    chrome.storage.local.get('deviceSettings'),
+  ]);
+  const next = { ...storedSettings, ...storedDevice, ...changes };
   const synced = Object.fromEntries(Object.entries(next).filter(([key]) => !DEVICE_SETTINGS.includes(key)));
   const device = Object.fromEntries(Object.entries(next).filter(([key]) => DEVICE_SETTINGS.includes(key)));
   // Listeners hear about each write through chrome.storage.onChanged.

@@ -24,7 +24,8 @@
   --guide: light-dark(#e3e5e8, #3a3c3f);
   --hover: light-dark(#f1f3f4, #2a2b2d);
   --hover-strong: light-dark(#e3e5e8, #3a3c3f);
-  --selected: light-dark(#fdf2ea, #352a21); /* the active tab of each window */
+  --band: light-dark(#eef1f5, #2a2c30); /* window rows: the top level of the tree */
+  --band-hover: light-dark(#e3e8ef, #34373c);
   --accent: light-dark(#c2410c, #fb923c); /* Tabbies orange */
   --accent-soft: light-dark(#fde6d6, #43301f);
   --focus: light-dark(#c2410c, #fb923c);

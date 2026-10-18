@@ -4,7 +4,7 @@
   "version": "0.5.0",
   "description": "A file-explorer-style tab manager: browse, move and organize your windows, tab groups and tabs as a tree, and nap tabs for later.",
   "minimum_chrome_version": "123",
-  "permissions": ["tabs", "tabGroups", "sidePanel", "storage"],
+  "permissions": ["tabs", "tabGroups", "sidePanel", "storage", "contextMenus"],
   "optional_permissions": ["bookmarks"],
   "background": {
     "service_worker": "background.js",
@@ -31,15 +31,17 @@
     "128": "icons/icon128.png"
   },
   "commands": {
-    "open-tabbies": {
-      "suggested_key": { "default": "Alt+T" },
-      "description": "Open Tabbies in a tab"
-    },
-    "open-side-panel": {
-      "description": "Open Tabbies in the side panel"
-    },
     "_execute_action": {
-      "description": "Same as clicking the Tabbies icon"
+      "suggested_key": { "default": "Alt+T" },
+      "description": "Open or close Tabbies"
+    },
+    "nap-tab": {
+      "suggested_key": { "default": "Alt+N" },
+      "description": "Nap the current tab"
+    },
+    "nap-current-window": {
+      "suggested_key": { "default": "Alt+W" },
+      "description": "Nap all tabs in this window"
     }
   }
 }

@@ -14,9 +14,9 @@ A file-explorer-style tab manager for Chrome. Tabbies shows every open window, t
 | --- | --- |
 | ![Popup](docs/screenshots/popup.png) | ![Side panel](docs/screenshots/side-panel.png) |
 
-- **Side panel** (the default): click the Tabbies icon in the toolbar. It stays open on the right while you browse.
-- **Full tab:** press **Alt+T**, or use the ⧉ button in the side panel. If Tabbies is already open in a tab, you're switched to it instead of getting a second copy.
-- **Popup:** a small window under the icon. Choose it in Settings if you prefer it to the side panel.
+- **Full tab** (the default): click the Tabbies icon in the toolbar, or press **Alt+T**. If Tabbies is already open in a tab, you're switched to it instead of getting a second copy. Press it again on the Tabbies tab to go back to the tab you came from.
+- **Side panel:** stays open on the right while you browse. Open it with the side-panel button in the Tabbies tab, or choose it in Settings as what the icon opens (then Alt+T opens and closes the panel).
+- **Popup:** a small window under the icon. Choose it in Settings if you prefer it.
 
 All three share the same code and features. The layout adapts to the space: narrow views hide the site column.
 
@@ -24,8 +24,9 @@ All three share the same code and features. The layout adapts to the space: narr
 
 Click ⚙ in any Tabbies view, or right-click the Tabbies icon → **Options**. Changes apply right away, in every open Tabbies view, and follow your Chrome profile to your other computers (Chrome Sync).
 
-- **Toolbar icon:** what clicking it opens: side panel (default), popup, or a full tab.
+- **Toolbar icon:** what clicking it opens: a full tab (default), the side panel, or a popup.
 - **Theme:** match your computer, light or dark.
+- **Tabbies tab:** keep it pinned.
 - **Naps:** keep links after waking; nap pinned tabs too.
 - **Keyboard shortcuts:** see the current keys and open Chrome's page to change them.
 - **Sync naps with your Chrome profile** (off by default): see below.
@@ -33,8 +34,11 @@ Click ⚙ in any Tabbies view, or right-click the Tabbies icon → **Options**. 
 
 ### Tree view
 
-- Windows → tab groups → tabs. Windows and groups expand and collapse.
+- Windows → tab groups → tabs. Click the arrow (or double-click the row) to expand or collapse a window or group.
+- **Clicks work like files and folders on a desktop:** one click selects, a double-click opens. Double-click a tab to switch to it; one click on a window or group selects it with all its tabs.
 - Windows show their tab count, and the window you opened Tabbies from is marked **Current**.
+- **Name your windows** ("Work", "Dinner plans"…) like folders: select the window, click its name and type, then Enter or just move the mouse away (Esc cancels). F2 or the window's ⋯ menu work too. Names stay after Chrome restarts, as long as the window comes back with mostly the same tabs. Naps are renamed the same way.
+- Close a whole window with the ✕ on its row or from its ⋯ menu. Undo brings it back.
 - Groups show their name and Chrome color.
 - Tabs show the site icon, title and site, plus small icons for **playing sound**, **muted**, **pinned** and **asleep** (unloaded by Chrome to save memory).
 - **Search** by title or URL as you type. Windows and groups with no matches are hidden.
@@ -43,23 +47,41 @@ Click ⚙ in any Tabbies view, or right-click the Tabbies icon → **Options**. 
 
 ### Tab actions
 
-Click a tab to switch to it (its window comes to the front). Hover a tab for **mute/unmute** and **close** buttons.
+Double-click a tab (or press Enter on it) to switch to it; its window comes to the front.
+
+Each row keeps just its main buttons, always faintly visible and brighter under the mouse: **nap** and **close** on tabs (plus **unmute/mute** on tabs that play sound), **nap**, **⋯** and **close** on windows and groups.
+
+**Right-click any row** for everything else, like on a desktop:
+
+- **Tabs:** Switch to this tab, Nap, Put in a new group, Ungroup and the group's color (for grouped tabs), Move to a new window, Mute, Close. Right-clicking a selected tab acts on the whole selection.
+- **Groups:** Rename, color, Ungroup, Close.
+- **Windows:** Nap, Sort tabs…, Rename, Close.
+- **Naps and napped links:** the same as their ⋯ menu; Wake or Delete for links.
+
+Right-clicking something that isn't selected selects it first.
 
 ### Selecting several tabs
 
 Select tabs the way you select files:
 
-- **Ctrl+click** (⌘+click on a Mac) adds or removes one tab without switching to it.
-- **Shift+click** selects every tab from the last one you clicked to this one, across groups and windows. **Ctrl+Shift+click** adds that range to what's already selected.
+- **Click** a tab to select just that tab. Click a window or group to select everything in it. Click a selected item again to unselect it.
+- **Ctrl+click** (⌘+click on a Mac) adds or removes one tab, or a whole window or group.
+- **Shift+click** selects every tab from the last one you clicked to this one, across groups and windows. Shift+click a group or window to take the range through all of it. **Ctrl+Shift+click** adds that range to what's already selected.
 - **Shift+↑/↓** extends the selection from the keyboard. **Ctrl+A** selects every tab you can see, so search first to select all matches.
-- **Esc** or clicking empty space clears the selection. A plain click on a tab also clears it.
+- **Esc**, **Cancel**, or clicking anywhere that isn't a row clears the selection.
+- The bar that appears while tabs are selected offers **Nap**, **Group**, **New window** and **Close** (with Undo). When some of them are in tab groups, it also offers **Ungroup** (takes just those tabs out; Undo puts them back) and **Color** (recolors their groups).
+- **Group** puts the selected tabs into a new tab group, together in the window of the first one (pinned tabs get unpinned, since groups can't hold them). Type a name for it right away, or press Enter to leave it unnamed; Undo puts every tab back.
+- Rename any tab group by clicking its name once it's selected, like a window's. A group's ⋯ or right-click menu also changes its **color**, **ungroups** it (the tabs stay open) or **closes** it; its ✕ closes it too. All of these can be undone.
+- A window's ⋯ menu also has **Nap this window**, same as its cat button.
 - Tabs you multi-selected in Chrome's own tab strip start out selected.
 
 Drag any selected tab and **all selected tabs move together**, as one block in their original order. The drop rules below apply to the whole block.
 
+Selected rows that sit next to each other join into one blue block. The tab each window is currently showing has a small orange bar beside its icon.
+
 ### Sorting a window
 
-Hover a window's row and click the sort button (⇅):
+Open a window's ⋯ menu (or right-click it) and choose **Sort tabs…**:
 
 | Sort | What it does |
 | --- | --- |
@@ -77,11 +99,14 @@ Groups stay together: tabs are sorted inside each group, and the ungrouped tabs 
 **Napping** saves tabs to a list in the **Naps** section and closes them, freeing their memory. **Waking** opens them again.
 
 - **Nap** with the Tab Nap cat button on a tab, a group or a window, or select tabs (Ctrl/Shift+click) and press **Nap** in the bar that appears. You can also drag tabs, groups or windows onto **Drop here to nap**, onto the Naps section (new nap), or onto an existing nap (adds to it).
-- Napping a window or every window leaves pinned tabs and Tabbies itself open. Empty new tabs and incognito tabs are never napped, so incognito addresses are never saved.
+- **Nap from anywhere:** press **Alt+N** to nap the tab you're looking at, or **Alt+W** for every tab in the window. Right-clicking the Tabbies icon offers **Nap this tab**, **Nap all tabs in this window** and **in every window**. The icon briefly shows how many tabs were napped.
+- Napping a window or every window leaves pinned tabs and Tabbies itself open. Empty new tabs have nothing to save, so they are simply closed along with the nap (Undo brings them back too). Incognito tabs are never napped, so incognito addresses are never saved.
 - A nap is named by its date, or after the tab group it came from (with the group's color). Rename it from its ⋯ menu.
-- **Wake** a whole nap with its ☀ button: here, or as a group if it came from one. The ⋯ menu also offers **Wake as a group** and **Wake in a new window**. Click a single link to open just that tab.
+- **Wake** a whole nap with its ☀ button: here, or as a group if it came from one. The ⋯ menu also offers **Wake as a group** and **Wake in a new window**. Double-click a single link to open just that tab.
 - Woken links leave the nap, and an empty nap disappears. To keep them instead, turn on **Keep links after waking** in the Naps ⋯ menu.
-- Every nap, wake and delete shows an **Undo** button.
+- **Drag naps around like files:** drag a nap, or one or more links, onto a window, between tabs, onto a tab group or onto **new window**, and they wake right there. A nap that came from a tab group wakes as that group. Inside Naps, drag links to reorder them or move them to another nap (onto the Naps heading makes a new nap), and drag naps to reorder them.
+- **Select links** with Ctrl/Shift+click like tabs; the bar that appears offers **Wake** and **Delete**.
+- Every nap, wake and delete shows an **Undo** button. To clear everything, the Naps ⋯ menu has **Delete all naps…**, which asks first.
 - Search finds napped tabs too.
 
 **Import and export:** the Naps ⋯ menu has **Import links…** and **Export links…**. The text has one `URL | Title` per line, with a blank line between naps, so you can keep it as a backup or bring in lists from other tab tools that use this format.
@@ -118,7 +143,10 @@ Without sync, removing the extension deletes your naps, so download a backup fir
 
 | Key | What it does |
 | --- | --- |
-| <kbd>Alt</kbd>+<kbd>T</kbd> | Open Tabbies in a tab |
+| <kbd>Alt</kbd>+<kbd>T</kbd> | Open or close Tabbies: same as clicking its icon (the Tabbies tab, or back to where you were, unless Settings says otherwise) |
+| <kbd>Alt</kbd>+<kbd>N</kbd> | Nap the tab you're looking at |
+| <kbd>Alt</kbd>+<kbd>W</kbd> | Nap all tabs in the current window |
+| <kbd>F2</kbd> on a window, group or nap row | Rename it |
 | <kbd>/</kbd> | Jump to the search box |
 | <kbd>Enter</kbd> in search | Switch to the first matching tab |
 | <kbd>Esc</kbd> in search | Clear the search |
@@ -129,7 +157,7 @@ Without sync, removing the extension deletes your naps, so download a backup fir
 | <kbd>Ctrl</kbd>+<kbd>A</kbd> | Select all visible tabs |
 | <kbd>Esc</kbd> | Clear the selection |
 
-You can change Alt+T, or add shortcuts for the popup and the side panel, at `chrome://extensions/shortcuts`.
+Tabbies has just these two shortcuts. Change their keys at `chrome://extensions/shortcuts` (Settings → Keyboard shortcuts takes you there).
 
 ## Install (developer mode)
 
@@ -138,7 +166,7 @@ You can change Alt+T, or add shortcuts for the popup and the side panel, at `chr
 3. Turn on **Developer mode** (top-right corner).
 4. Click **Load unpacked** and pick the `Tabbies` folder (the one that contains `manifest.json`).
 5. Click the puzzle-piece icon in the toolbar and pin Tabbies.
-6. Click the Tabbies icon to open the side panel, or press **Alt+T** for the full tab.
+6. Click the Tabbies icon or press **Alt+T** to open Tabbies in a tab.
 
 After you change the code, click the reload button (↻) on the Tabbies card in `chrome://extensions`. Reloading closes any open Tabbies tabs and panels, so open them again.
 
@@ -150,6 +178,7 @@ To include incognito windows, open **Details** on the Tabbies card and turn on *
 - `tabGroups`: read, move and recreate tab groups.
 - `sidePanel`: show Tabbies in Chrome's side panel.
 - `storage`: keep your naps and settings (settings sync with your Chrome profile).
+- `contextMenus`: the Nap items when you right-click the Tabbies icon.
 - `bookmarks` (optional, asked only if you turn on **Sync naps**): keep naps in a synced bookmarks folder.
 
 Tabbies never reads page content and doesn't send your data anywhere. Site icons are loaded from the icon address Chrome reports for each tab, usually straight from the browser cache.
@@ -160,7 +189,7 @@ Tabbies never reads page content and doesn't send your data anywhere. Site icons
 manifest.json          Extension settings: permissions, side panel, options page, shortcuts
 background.js          Service worker: what the toolbar icon opens, keyboard shortcuts
 tabbies.html/.js       Full-tab view
-sidepanel.html/.js     Side panel view (opened by the toolbar icon by default)
+sidepanel.html/.js     Side panel view
 popup.html/.js         Mini popup (if chosen in Settings)
 settings.html          Chrome's Options page for Tabbies (settings-page.js)
 shared/
@@ -193,10 +222,10 @@ No build step: plain HTML, CSS and JavaScript (ES modules).
 - [x] Phase 1: full-tab view, tree, click/close/mute, search, live updates, shortcut, dark mode
 - [x] Phase 2: popup and side panel views
 - [ ] Phase 3: task-manager actions (pin, sleep, last used, reload, duplicate, Chrome Task Manager)
-- [ ] Phase 4: select multiple tabs and move them (done: Ctrl/Shift selection, drag a selection), merge-windows dialog
+- [x] Phase 4: select multiple tabs and move them (Ctrl/Shift selection, drag a selection); merge windows by dragging one onto another
 - [x] Sorting a window by site, title or last use, with Undo
-- [x] Settings page; the toolbar icon opens the side panel by default
+- [x] Settings page; the toolbar icon opens the full tab by default
 - [x] Settings sync with your Chrome profile; optional nap sync through bookmarks
-- [ ] Phase 5: tab group tools (create, auto-group by site, rename, recolor, ungroup)
+- [x] Phase 5: tab group tools (create from a selection, rename, recolor, ungroup, close)
 - [x] Phase 6: drag and drop (tabs, groups and windows; to a new window; merging)
 - [x] Phase 7: saved lists ("Naps") with import/export and undo
