@@ -1,12 +1,12 @@
 // shared/nap-data.js
 //
 // Plain helpers for Naps (tabs closed and kept for later), with no chrome.*
-// calls: display names, and the OneTab-compatible text format used for
+// calls: display names, and the plain-text format used for
 // import and export.
 //
-// OneTab's "Export URLs" writes one link per line as "URL | Title", with a
+// The text has one link per line as "URL | Title", with a
 // blank line between lists; its "Import URLs" reads the same. So text copied
-// out of OneTab can be imported here, and Tabbies' export can go into OneTab.
+// out of other tab tools that use this common format can be imported too.
 
 const dateFormat = new Intl.DateTimeFormat(undefined, {
   month: 'short',
@@ -28,10 +28,10 @@ export function napName(nap) {
 }
 
 /**
- * OneTab text → lists of links: [{ links: [{ url, title }] }].
+ * Text → lists of links: [{ links: [{ url, title }] }].
  * Lines that aren't web or browser addresses are skipped.
  */
-export function parseOneTab(text) {
+export function parseNapText(text) {
   const lists = [];
   let current = null;
   for (const rawLine of text.split(/\r?\n/)) {
@@ -53,8 +53,8 @@ export function parseOneTab(text) {
   return lists;
 }
 
-/** Naps → OneTab text. */
-export function formatOneTab(naps) {
+/** Naps → text. */
+export function formatNapText(naps) {
   return naps
     .filter((nap) => nap.links.length > 0)
     .map((nap) => nap.links.map((link) => `${link.url} | ${link.title.replace(/\s+/g, ' ')}`).join('\n'))

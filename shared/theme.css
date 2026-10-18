@@ -1,80 +1,61 @@
 /* shared/theme.css
  *
- * Colors and fonts shared by every Tabbies view. Light by default; dark when
- * the system (or Chrome) is set to dark mode, via prefers-color-scheme.
+ * Colors and fonts shared by every Tabbies view.
+ *
+ * Each color is written once as light-dark(<light>, <dark>). The browser
+ * picks one based on the page's `color-scheme`:
+ *   - normally "light dark", which follows the computer's light/dark setting;
+ *   - the Theme setting can force one by putting data-theme="light" or
+ *     data-theme="dark" on <html> (see shared/theme-boot.js and start-view.js).
+ * light-dark() needs Chrome 123+, hence minimum_chrome_version in manifest.json.
  */
 
 :root {
-  /* Lets Chrome draw scrollbars and form controls in the matching theme. */
+  /* Also makes Chrome draw scrollbars and form controls in the same theme. */
   color-scheme: light dark;
 
   --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 
-  --bg: #ffffff;
-  --bg-raised: #f3f4f6;
-  --text: #1f2328;
-  --text-muted: #5f6368;
-  --border: #dadce0;
-  --guide: #e3e5e8;
-  --hover: #f1f3f4;
-  --hover-strong: #e3e5e8;
-  --selected: #fdf2ea; /* the active tab of each window */
-  --accent: #c2410c; /* Tabbies orange */
-  --accent-soft: #fde6d6;
-  --focus: #c2410c;
-  --danger: #c5221f;
-  --selection: #dbe7fc; /* Ctrl/Shift-selected tabs, like selected files */
-  --selection-edge: #a8c7fa;
-  --toast-bg: #2b2c2f;
-  --toast-text: #f1f3f4;
-  --toast-action: #fdba8c;
-  --shadow: 0 8px 24px rgb(0 0 0 / 0.16);
+  --bg: light-dark(#ffffff, #1f1f1f);
+  --bg-raised: light-dark(#f3f4f6, #2b2c2e);
+  --text: light-dark(#1f2328, #e8eaed);
+  --text-muted: light-dark(#5f6368, #9aa0a6);
+  --border: light-dark(#dadce0, #3c4043);
+  --guide: light-dark(#e3e5e8, #3a3c3f);
+  --hover: light-dark(#f1f3f4, #2a2b2d);
+  --hover-strong: light-dark(#e3e5e8, #3a3c3f);
+  --selected: light-dark(#fdf2ea, #352a21); /* the active tab of each window */
+  --accent: light-dark(#c2410c, #fb923c); /* Tabbies orange */
+  --accent-soft: light-dark(#fde6d6, #43301f);
+  --focus: light-dark(#c2410c, #fb923c);
+  --danger: light-dark(#c5221f, #f28b82);
+  --selection: light-dark(#dbe7fc, #233a5c); /* Ctrl/Shift-selected tabs, like selected files */
+  --selection-edge: light-dark(#a8c7fa, #3d6399);
+  --toast-bg: light-dark(#2b2c2f, #e8eaed);
+  --toast-text: light-dark(#f1f3f4, #202124);
+  --toast-action: light-dark(#fdba8c, #b5440b);
+  --shadow-color: light-dark(rgb(0 0 0 / 0.16), rgb(0 0 0 / 0.5));
+  --shadow: 0 8px 24px var(--shadow-color);
 
   /* Chrome's tab group colors, and the text color used on top of them. */
-  --group-grey: #5f6368;
-  --group-blue: #1a73e8;
-  --group-red: #d93025;
-  --group-yellow: #f9ab00;
-  --group-green: #188038;
-  --group-pink: #d01884;
-  --group-purple: #9334e6;
-  --group-cyan: #007b83;
-  --group-orange: #fa903e;
-  --group-ink: #ffffff;
+  --group-grey: light-dark(#5f6368, #bdc1c6);
+  --group-blue: light-dark(#1a73e8, #8ab4f8);
+  --group-red: light-dark(#d93025, #f28b82);
+  --group-yellow: light-dark(#f9ab00, #fdd663);
+  --group-green: light-dark(#188038, #81c995);
+  --group-pink: light-dark(#d01884, #ff8bcb);
+  --group-purple: light-dark(#9334e6, #d7aefb);
+  --group-cyan: light-dark(#007b83, #78d9ec);
+  --group-orange: light-dark(#fa903e, #fcad70);
+  --group-ink: light-dark(#ffffff, #202124);
   --group-ink-light-bg: #202124;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #1f1f1f;
-    --bg-raised: #2b2c2e;
-    --text: #e8eaed;
-    --text-muted: #9aa0a6;
-    --border: #3c4043;
-    --guide: #3a3c3f;
-    --hover: #2a2b2d;
-    --hover-strong: #3a3c3f;
-    --selected: #352a21;
-    --accent: #fb923c;
-    --accent-soft: #43301f;
-    --focus: #fb923c;
-    --danger: #f28b82;
-    --selection: #233a5c;
-    --selection-edge: #3d6399;
-    --toast-bg: #e8eaed;
-    --toast-text: #202124;
-    --toast-action: #b5440b;
-    --shadow: 0 8px 24px rgb(0 0 0 / 0.5);
+/* The Theme setting: a fixed light or dark look instead of following the system. */
+:root[data-theme="light"] {
+  color-scheme: light;
+}
 
-    --group-grey: #bdc1c6;
-    --group-blue: #8ab4f8;
-    --group-red: #f28b82;
-    --group-yellow: #fdd663;
-    --group-green: #81c995;
-    --group-pink: #ff8bcb;
-    --group-purple: #d7aefb;
-    --group-cyan: #78d9ec;
-    --group-orange: #fcad70;
-    --group-ink: #202124;
-  }
+:root[data-theme="dark"] {
+  color-scheme: dark;
 }

@@ -1,17 +1,17 @@
 {
   "manifest_version": 3,
   "name": "Tabbies",
-  "version": "0.3.0",
+  "version": "0.5.0",
   "description": "A file-explorer-style tab manager: browse, move and organize your windows, tab groups and tabs as a tree, and nap tabs for later.",
-  "minimum_chrome_version": "116",
+  "minimum_chrome_version": "123",
   "permissions": ["tabs", "tabGroups", "sidePanel", "storage"],
+  "optional_permissions": ["bookmarks"],
   "background": {
     "service_worker": "background.js",
     "type": "module"
   },
   "action": {
     "default_title": "Tabbies",
-    "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png"
@@ -19,6 +19,10 @@
   },
   "side_panel": {
     "default_path": "sidepanel.html"
+  },
+  "options_ui": {
+    "page": "settings.html",
+    "open_in_tab": true
   },
   "icons": {
     "16": "icons/icon16.png",
@@ -35,7 +39,7 @@
       "description": "Open Tabbies in the side panel"
     },
     "_execute_action": {
-      "description": "Open the Tabbies popup"
+      "description": "Same as clicking the Tabbies icon"
     }
   }
 }

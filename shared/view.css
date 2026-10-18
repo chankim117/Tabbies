@@ -52,6 +52,12 @@ body {
   color: var(--text);
 }
 
+/* The ⚙ button while Settings are showing. */
+.view-actions button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
 .view-actions button:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: -2px;
@@ -118,6 +124,10 @@ body.side-panel #explorer {
   padding: 0 6px 16px;
 }
 
+body.side-panel .settings-view {
+  padding: 0 12px;
+}
+
 /* ---- Popup: fixed size, header stays put, only the tree scrolls ----------------------- */
 
 body.popup {
@@ -136,9 +146,14 @@ body.popup .view-header h1 {
   font-size: 15px;
 }
 
-body.popup #explorer {
+body.popup #explorer,
+body.popup .settings-view {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   padding: 0 6px;
+}
+
+body.popup .settings-view {
+  padding: 0 12px;
 }

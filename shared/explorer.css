@@ -40,8 +40,9 @@
   top: 0;
   z-index: 1;
   display: flex;
+  flex-wrap: wrap; /* the selection bar takes its own line */
   align-items: center;
-  gap: 16px;
+  gap: 8px 16px;
   padding: 12px 0;
   background: var(--bg);
 }
@@ -106,8 +107,10 @@
   border-radius: 6px;
 }
 
+/* background-color (not the background shorthand), so the current-tab bar
+   below, drawn as a background image, stays visible on hover. */
 .explorer .row:hover {
-  background: var(--hover);
+  background-color: var(--hover);
 }
 
 .explorer .toggle,
@@ -207,17 +210,16 @@
 
 /* ---- Groups ------------------------------------------------------------------- */
 
-.explorer .group {
-  --group: var(--group-grey);
-}
-.explorer .group[data-color="blue"] { --group: var(--group-blue); }
-.explorer .group[data-color="red"] { --group: var(--group-red); }
-.explorer .group[data-color="yellow"] { --group: var(--group-yellow); }
-.explorer .group[data-color="green"] { --group: var(--group-green); }
-.explorer .group[data-color="pink"] { --group: var(--group-pink); }
-.explorer .group[data-color="purple"] { --group: var(--group-purple); }
-.explorer .group[data-color="cyan"] { --group: var(--group-cyan); }
-.explorer .group[data-color="orange"] { --group: var(--group-orange); }
+/* --group is the Chrome group color, for groups and for naps made from a group. */
+.explorer [data-color] { --group: var(--group-grey); }
+.explorer [data-color="blue"] { --group: var(--group-blue); }
+.explorer [data-color="red"] { --group: var(--group-red); }
+.explorer [data-color="yellow"] { --group: var(--group-yellow); }
+.explorer [data-color="green"] { --group: var(--group-green); }
+.explorer [data-color="pink"] { --group: var(--group-pink); }
+.explorer [data-color="purple"] { --group: var(--group-purple); }
+.explorer [data-color="cyan"] { --group: var(--group-cyan); }
+.explorer [data-color="orange"] { --group: var(--group-orange); }
 
 .explorer .group-label {
   min-width: 0;
@@ -249,12 +251,13 @@
 
 /* ---- Tabs --------------------------------------------------------------------- */
 
+/* The tab each window is showing: a small orange bar just left of its icon.
+   (A full background here looked too much like a selection.) */
 .explorer .tab.is-active {
-  background: var(--selected);
-}
-
-.explorer .tab.is-active:hover {
-  background: var(--hover);
+  background-image: linear-gradient(var(--accent), var(--accent));
+  background-repeat: no-repeat;
+  background-size: 3px 16px;
+  background-position: calc(var(--depth, 0) * 24px + 2px) center;
 }
 
 .explorer .favicon {
@@ -303,10 +306,37 @@
 }
 
 /* Selected with Ctrl/Shift+click. Comes after .is-active so selection wins. */
-.explorer .tab.is-selected,
-.explorer .tab.is-selected:hover {
-  background: var(--selection);
+.explorer .row.is-selected,
+.explorer .row.is-selected:hover {
+  background-color: var(--selection);
   box-shadow: inset 0 0 0 1px var(--selection-edge);
+}
+
+/* Selected rows next to each other merge into one block, like selected
+   files: no outline or rounding where they touch. */
+.explorer .row.is-selected:has(+ .row.is-selected) {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  box-shadow:
+    inset 1px 0 var(--selection-edge),
+    inset -1px 0 var(--selection-edge),
+    inset 0 1px var(--selection-edge);
+}
+
+.explorer .row.is-selected + .row.is-selected {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+  box-shadow:
+    inset 1px 0 var(--selection-edge),
+    inset -1px 0 var(--selection-edge),
+    inset 0 -1px var(--selection-edge);
+}
+
+.explorer .row.is-selected + .row.is-selected:has(+ .row.is-selected) {
+  border-radius: 0;
+  box-shadow:
+    inset 1px 0 var(--selection-edge),
+    inset -1px 0 var(--selection-edge);
 }
 
 /* Asleep (discarded) tabs are dimmed, like Chrome does in the tab strip. */
@@ -335,8 +365,10 @@
   opacity: 0;
 }
 
+/* Shown on hover, or when the keyboard (not a mouse click) put focus in the
+   row, so the last row you clicked doesn't keep its buttons showing. */
 .explorer .row:hover .action,
-.explorer .row:focus-within .action {
+.explorer .row:has(:focus-visible) .action {
   opacity: 1;
 }
 
@@ -388,34 +420,50 @@
 }
 
 /* A group branch has no --depth of its own; it sits at depth 1. */
-.explorer .branch.group.drop-after::after {
+.explorer .branch.group.drop-after::after,
+.explorer .branch.nap.drop-after::after {
   left: calc(8px + 24px);
 }
 
-/* "It will go into this": a window, a group, or the new-window zone. */
+/* "It will go into this": a window, a group, a nap, or a drop zone. */
 .explorer .row.drop-inside {
   background: var(--accent-soft);
   box-shadow: inset 0 0 0 1.5px var(--accent);
 }
 
-.explorer .new-window-zone {
+/* "New window" and "Nap" drop zones, pinned to the bottom while dragging. */
+.explorer .drop-zones {
   position: sticky;
   bottom: 8px;
   z-index: 2;
   display: flex;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.explorer .drop-zone {
+  flex: 1;
+  display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
+  min-width: 0;
   height: 44px;
-  margin: 8px 0;
+  padding: 0 8px;
   border: 1.5px dashed var(--border);
   border-radius: 8px;
   background: var(--bg);
   color: var(--text-muted);
   font-weight: 500;
+  text-align: center;
 }
 
-.explorer .new-window-zone.drop-inside {
+.explorer .drop-zone .nap-icon {
+  width: 24px;
+  height: 24px;
+}
+
+.explorer .drop-zone.drop-inside {
   border-color: var(--accent);
   background: var(--accent-soft);
   color: var(--accent);
@@ -432,6 +480,185 @@
   background: var(--accent);
   color: var(--bg);
   font: 600 12px var(--font);
+}
+
+/* ---- Naps --------------------------------------------------------------------------- */
+
+.explorer .nap-icon {
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+
+/* The Tab Nap cat is a picture, so it gets a little more room than line icons. */
+.explorer .action.nap .nap-icon {
+  width: 19px;
+  height: 19px;
+}
+
+.explorer .branch.naps {
+  margin-top: 16px;
+}
+
+.explorer .naps > .row .toggle {
+  height: 34px;
+  font-weight: 600;
+}
+
+.explorer .naps > .row .node-icon {
+  width: 20px;
+  height: 20px;
+}
+
+/* Small dot in the nap's color when it was napped from a tab group. */
+.explorer .nap-color {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--group);
+}
+
+.explorer .naps-empty {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  max-width: 62ch;
+  margin: 4px 0 8px;
+  padding: 10px 12px 10px 32px;
+  color: var(--text-muted);
+}
+
+.explorer .naps-empty p {
+  margin: 0;
+}
+
+.explorer .naps-empty img {
+  flex: none;
+}
+
+/* ---- Selection bar ------------------------------------------------------------------ */
+
+.explorer .selection-bar {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 6px 6px 12px;
+  border-radius: 8px;
+  background: var(--selection);
+  box-shadow: inset 0 0 0 1px var(--selection-edge);
+}
+
+.explorer .selection-count {
+  margin-right: auto;
+  font-weight: 600;
+}
+
+.explorer .selection-bar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--selection-edge);
+  border-radius: 6px;
+  background: var(--bg);
+  cursor: pointer;
+}
+
+.explorer .selection-bar button:hover {
+  background: var(--hover);
+}
+
+/* ---- Dialog (rename, import, export) ---------------------------------------------------- */
+
+.explorer .dialog {
+  width: min(560px, calc(100vw - 32px));
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: var(--shadow);
+  font: 13px/1.5 var(--font);
+}
+
+.explorer .dialog::backdrop {
+  background: rgb(0 0 0 / 0.35);
+}
+
+.explorer .dialog form {
+  display: grid;
+  gap: 12px;
+}
+
+.explorer .dialog-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.explorer .dialog-text {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.explorer .dialog-input,
+.explorer .dialog-area {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-raised);
+  color: var(--text);
+  font: 13px var(--font);
+}
+
+.explorer .dialog-area {
+  resize: vertical;
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
+  white-space: pre;
+}
+
+.explorer .dialog-input:focus,
+.explorer .dialog-area:focus {
+  outline: none;
+  border-color: var(--focus);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.explorer .dialog-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.explorer .button {
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.explorer .button:hover {
+  background: var(--hover);
+}
+
+.explorer .button.primary {
+  border-color: transparent;
+  background: var(--accent);
+  color: var(--bg);
+}
+
+.explorer .button.primary:hover {
+  filter: brightness(1.08);
 }
 
 /* ---- Sort menu --------------------------------------------------------------------
@@ -484,6 +711,25 @@
 
 .explorer .menu-label {
   font-weight: 500;
+}
+
+/* Checkbox items (e.g. "Keep links after waking") show a check when on. */
+.explorer .menu-item[aria-checked] .menu-label::before {
+  content: "";
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  margin-right: 8px;
+  border: 1.5px solid var(--text-muted);
+  border-radius: 3px;
+  vertical-align: -1px;
+}
+
+.explorer .menu-item[aria-checked="true"] .menu-label::before {
+  border-color: var(--accent);
+  background: var(--accent)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 6.2 5 8.5l4.5-5' fill='none' stroke='white' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+    center / 12px no-repeat;
 }
 
 .explorer .menu-hint {

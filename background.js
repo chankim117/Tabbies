@@ -7,17 +7,32 @@
 // of this file (not inside a callback or after an `await`), so Chrome finds
 // them every time it wakes the worker up.
 //
-// The toolbar icon needs no code here: manifest.json's "default_popup" makes
-// Chrome open popup.html by itself. This worker only handles keyboard shortcuts.
+// Its jobs: make the toolbar icon do what Settings says, and handle the
+// keyboard shortcuts.
 //
 // "type": "module" in manifest.json lets this file import shared code.
 
-import { openFullTab, openSidePanel } from './shared/chrome-api.js';
+import { applyToolbarAction, onSettingsChanged, openFullTab, openSidePanel } from './shared/chrome-api.js';
+
+// The "Toolbar icon opens" setting (side panel by default). Applied every
+// time the worker starts, so it's right after installs, updates and restarts,
+// and again whenever the setting changes.
+applyToolbarAction().catch((error) => console.error('Tabbies: could not set up the toolbar icon', error));
+onSettingsChanged((settings) => {
+  applyToolbarAction(settings).catch((error) => console.error('Tabbies: could not set up the toolbar icon', error));
+});
+
+// chrome.action.onClicked fires when the toolbar icon is clicked, but only
+// while it opens neither a popup nor the side panel: that is the "A full tab"
+// setting. `tab` is the active tab of the window whose toolbar was clicked.
+chrome.action.onClicked.addListener((tab) => {
+  openFullTab(tab?.windowId).catch((error) => console.error('Tabbies: could not open the Tabbies tab', error));
+});
 
 // chrome.commands.onCommand fires for keyboard shortcuts declared under
 // "commands" in manifest.json. Users can set or change the keys at
 // chrome://extensions/shortcuts. `tab` is the active tab of the focused window.
-// ("_execute_action", the popup shortcut, is handled by Chrome itself.)
+// ("_execute_action" is handled by Chrome itself: it acts like a click on the icon.)
 chrome.commands.onCommand.addListener((command, tab) => {
   if (command === 'open-tabbies') {
     // Alt+T: switch to the Tabbies tab, or open one.

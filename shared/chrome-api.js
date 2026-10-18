@@ -60,7 +60,7 @@
 // @typedef {object} Snapshot
 // @property {WindowNode[]} windows
 // @property {object[]} naps         saved lists, see naps-api.js
-// @property {object} napSettings    { keepAfterWaking }
+// @property {object} settings       see settings-api.js
 //
 // @typedef {object} MoveTarget  Where moveTab / moveGroup put things. One of:
 //   { windowId }               at the end of that window
@@ -75,10 +75,12 @@
 
 import { SORT_ORDERS } from './sorting.js';
 import { readNaps } from './naps-api.js';
+import { readSettings } from './settings-api.js';
 
-// Naps (OneTab-style saved lists) live in their own file; the explorer gets
-// them through this module like everything else.
+// Naps (tabs closed and saved for later) and settings live in their own files; the
+// pages get them through this module like everything else.
 export * from './naps-api.js';
+export * from './settings-api.js';
 
 const TABBIES_URL = chrome.runtime.getURL('tabbies.html');
 
@@ -110,7 +112,7 @@ const DISPLAYED_TAB_PROPERTIES = [
  * @returns {Promise<Snapshot>}
  */
 export async function getSnapshot() {
-  const [windows, groups, currentWindowId, incognitoAllowed, saved] = await Promise.all([
+  const [windows, groups, currentWindowId, incognitoAllowed, { naps }, settings] = await Promise.all([
     // chrome.windows.getAll lists the open windows. `populate: true` includes
     // each window's tabs (chrome.tabs.Tab objects, already in tab-strip order).
     // The "tabs" permission is what makes each tab's url, title and favIconUrl
@@ -122,6 +124,7 @@ export async function getSnapshot() {
     getCurrentWindowId().catch(() => null),
     isIncognitoAllowed(),
     readNaps(),
+    readSettings(),
   ]);
 
   const groupsById = new Map(groups.map((group) => [group.id, group]));
@@ -129,8 +132,8 @@ export async function getSnapshot() {
     windows: windows
       .filter((win) => incognitoAllowed || !win.incognito)
       .map((win) => toWindowNode(win, groupsById, currentWindowId)),
-    naps: saved.naps,
-    napSettings: saved.settings,
+    naps,
+    settings,
   };
 }
 
@@ -161,9 +164,35 @@ export function subscribe(onChange) {
 
   // chrome.storage.onChanged fires when any page of the extension saves
   // something, e.g. the popup napping tabs while the full tab is open.
+  // chrome.storage.sync changes can also arrive from another computer.
   const storageChanged = (changes, areaName) => {
-    if (areaName === 'local' && ('naps' in changes || 'settings' in changes)) changed();
+    if (areaName === 'sync' && 'settings' in changes) changed();
+    if (areaName === 'local' && ('naps' in changes || 'deviceSettings' in changes || 'napIcons' in changes)) changed();
   };
+
+  // While naps sync through bookmarks, bookmark changes (here, or arriving
+  // through Chrome Sync from another computer) can change the naps.
+  // chrome.bookmarks only exists while the optional "bookmarks" permission is
+  // granted, so these listeners are added whenever it is (chrome.permissions.onAdded).
+  const bookmarkListeners = [];
+  const listenToBookmarks = () => {
+    if (!chrome.bookmarks || bookmarkListeners.length > 0) return;
+    for (const event of [
+      chrome.bookmarks.onCreated,
+      chrome.bookmarks.onRemoved,
+      chrome.bookmarks.onChanged,
+      chrome.bookmarks.onMoved,
+      chrome.bookmarks.onChildrenReordered,
+    ]) {
+      event.addListener(changed);
+      bookmarkListeners.push(event);
+    }
+  };
+  const permissionsChanged = () => {
+    listenToBookmarks();
+    changed();
+  };
+  listenToBookmarks();
 
   // Each chrome.*.onXxx object is an event: addListener(fn) starts calling fn
   // when the event fires, removeListener(fn) stops it. Listeners added from an
@@ -183,12 +212,15 @@ export function subscribe(onChange) {
     [chrome.tabGroups.onRemoved, changed],
     [chrome.windows.onCreated, changed],
     [chrome.windows.onRemoved, changed],
-    [chrome.storage.onChanged, storageChanged], // naps or nap settings changed
+    [chrome.storage.onChanged, storageChanged], // naps or settings changed
+    [chrome.permissions.onAdded, permissionsChanged], // nap sync was turned on...
+    [chrome.permissions.onRemoved, permissionsChanged], // ...or off
   ];
   for (const [event, listener] of listeners) event.addListener(listener);
 
   return function unsubscribe() {
     for (const [event, listener] of listeners) event.removeListener(listener);
+    for (const event of bookmarkListeners) event.removeListener(changed);
     changed.cancel();
   };
 }

@@ -16,6 +16,13 @@
 //   group  → before/after another group or ungrouped tab; onto a window to
 //            put it at the end; or onto "new window"
 //   window → onto another window, merging all of its tabs into that one
+//   any    → onto "Drop here to nap" or the Naps section: nap them (a window
+//            naps its unpinned tabs); onto one nap: add them to that nap
+//   napped links (one, or a Ctrl/Shift selection) and whole naps:
+//          → anywhere a tab could go (a spot in a window, a group, a window,
+//            "new window"): wake them right there
+//          → inside Naps: links move before/after another link or into
+//            another nap; naps move before/after another nap
 // Never allowed: mixing incognito and regular windows (Chrome forbids it),
 // grouping pinned tabs, or placing unpinned tabs among pinned ones.
 
@@ -27,23 +34,31 @@ const BEFORE_GROUP_ZONE = 0.3; // top 30% of a group's row = "before the group"
  * @param {object} options
  * @param {HTMLElement} options.root           element that receives the drag events
  * @param {HTMLElement} options.tree           the tree of rows
- * @param {HTMLElement} options.newWindowZone  drop zone for "move to a new window"
- * @param {object} options.model               { tab(id), group(id), window(id) } lookups, plus
- *   selectionFor(tabId): the tabs to drag when that tab is picked up (the
- *   whole selection if it's selected, otherwise just that tab)
+ * @param {object} options.zones               drop zones shown at the bottom while dragging:
+ *   { container, newWindow ("move to a new window"), nap ("nap these") }
+ * @param {object} options.model               { tab(id), group(id), window(id), nap(id) } lookups, plus
+ *   selectionFor(tabId) / linkSelectionFor(linkId): what to drag when that
+ *   tab or link is picked up (the whole selection if it's selected, otherwise
+ *   just that one)
  * @param {(toggle: HTMLElement) => void} options.expand      opens a collapsed branch
  * @param {(source: object, target: object) => void} options.onDrop
  * @param {() => void} options.onDragEnd
  * @returns {{ isDragging(): boolean }}
  */
-export function enableDragAndDrop({ root, tree, newWindowZone, model, expand, onDrop, onDragEnd }) {
-  // { kind: 'tab', items } | { kind: 'group'|'window', item }, plus the
-  // `elements` dimmed while dragging.
+export function enableDragAndDrop({ root, tree, zones, model, expand, onDrop, onDragEnd }) {
+  // { kind: 'tab'|'links', items } | { kind: 'group'|'window'|'nap', item },
+  // plus the `elements` dimmed while dragging.
   let source = null;
+  // Pressing a row's small buttons (nap, mute, close, ⋯) must never turn into
+  // a drag, even if the mouse moves a little during the click.
+  let pressedButton = false;
   let indicator = null; // { element, className } currently shown
   let expandTimer = null;
   let expandToggle = null;
 
+  root.addEventListener('pointerdown', (event) => {
+    pressedButton = Boolean(event.target.closest?.('.action'));
+  });
   root.addEventListener('dragstart', onDragStart);
   root.addEventListener('dragover', onDragOver);
   root.addEventListener('dragleave', onDragLeave);
@@ -53,6 +68,10 @@ export function enableDragAndDrop({ root, tree, newWindowZone, model, expand, on
   return { isDragging: () => source !== null };
 
   function onDragStart(event) {
+    if (pressedButton) {
+      event.preventDefault(); // cancel the drag; the click still happens
+      return;
+    }
     const element = event.target.closest?.('[draggable="true"]');
     source = element ? describeSource(element) : null;
     if (!source) return;
@@ -62,13 +81,16 @@ export function enableDragAndDrop({ root, tree, newWindowZone, model, expand, on
     event.dataTransfer.effectAllowed = 'move';
     event.dataTransfer.setData('application/x-tabbies', source.kind);
     for (const element of source.elements) element.classList.add('is-dragging');
-    newWindowZone.hidden = source.kind === 'window';
+    zones.newWindow.hidden = source.kind === 'window';
+    // Napped things are napped already.
+    zones.nap.hidden = sourceIsIncognito() || source.kind === 'links' || source.kind === 'nap';
+    zones.container.hidden = false;
 
-    // Several tabs: show a "3 tabs" badge under the pointer instead of one row.
-    if (source.kind === 'tab' && source.items.length > 1) {
+    // Several tabs or links: show a "3 tabs" badge under the pointer instead of one row.
+    if ((source.kind === 'tab' || source.kind === 'links') && source.items.length > 1) {
       const badge = document.createElement('div');
       badge.className = 'drag-badge';
-      badge.textContent = `${source.items.length} tabs`;
+      badge.textContent = `${source.items.length} ${source.kind === 'tab' ? 'tabs' : 'links'}`;
       root.append(badge);
       event.dataTransfer.setDragImage(badge, 12, 12);
       // The browser takes its picture of the badge right away; then it can go.
@@ -113,7 +135,7 @@ export function enableDragAndDrop({ root, tree, newWindowZone, model, expand, on
     showIndicator(null);
     clearTimeout(expandTimer);
     expandToggle = null;
-    newWindowZone.hidden = true;
+    zones.container.hidden = true;
     source = null;
     onDragEnd();
   }
@@ -121,6 +143,12 @@ export function enableDragAndDrop({ root, tree, newWindowZone, model, expand, on
   // ---- What is being dragged? ----------------------------------------------------
 
   function describeSource(element) {
+    if (element.matches('.link')) {
+      const items = model.linkSelectionFor(element.dataset.linkId);
+      if (items.length === 0) return null;
+      const elements = items.map((link) => tree.querySelector(`.link[data-link-id="${link.id}"]`)).filter(Boolean);
+      return { kind: 'links', items, elements };
+    }
     if (element.matches('.tab')) {
       const items = model.selectionFor(Number(element.dataset.tabId));
       if (items.length === 0) return null;
@@ -137,6 +165,10 @@ export function enableDragAndDrop({ root, tree, newWindowZone, model, expand, on
       const item = model.window(Number(branch.dataset.windowId));
       return item && { kind: 'window', item, elements: [branch] };
     }
+    if (branch?.matches('.nap')) {
+      const item = model.nap(branch.dataset.napId);
+      return item && { kind: 'nap', item, elements: [branch] };
+    }
     return null;
   }
 
@@ -150,9 +182,29 @@ export function enableDragAndDrop({ root, tree, newWindowZone, model, expand, on
 
     if (element?.closest('.new-window-zone')) {
       if (source.kind === 'window') return null;
+      if (source.kind === 'links' || source.kind === 'nap') {
+        return { target: { newWindow: true }, indicator: inside(zones.newWindow) };
+      }
       // A new window is either incognito or not, so the tabs must all agree.
       if (source.kind === 'tab' && new Set(source.items.map((tab) => tab.incognito)).size > 1) return null;
-      return { target: { newWindow: true }, indicator: { element: newWindowZone, className: 'drop-inside' } };
+      return { target: { newWindow: true }, indicator: inside(zones.newWindow) };
+    }
+
+    // Naps: the zone at the bottom or the Naps section make a new nap; one
+    // nap (its row or any link in it) gets the tabs added to its end.
+    // Incognito tabs are never napped, so their addresses never reach the disk.
+    if (element?.closest('.nap-zone')) {
+      return sourceIsIncognito() ? null : { target: { nap: true }, indicator: inside(zones.nap) };
+    }
+    const napsBranch = element?.closest('.branch.naps');
+    if (napsBranch && source.kind === 'links') return dropLinksInNaps(element, napsBranch, event);
+    if (napsBranch && source.kind === 'nap') return dropNapInNaps(element, event);
+    if (napsBranch) {
+      if (sourceIsIncognito()) return null;
+      const napBranch = element.closest('.branch.nap');
+      return napBranch
+        ? { target: { nap: true, napId: napBranch.dataset.napId }, indicator: inside(headerRow(napBranch)) }
+        : { target: { nap: true }, indicator: inside(headerRow(napsBranch)) };
     }
 
     const row = element?.closest('.row');
@@ -163,7 +215,41 @@ export function enableDragAndDrop({ root, tree, newWindowZone, model, expand, on
 
     if (source.kind === 'window') return dropWindow(win, windowBranch);
     if (source.kind === 'group') return dropGroup(win, row, event);
+    // Tabs, and napped links/naps (they wake up where they're dropped, so
+    // they follow the same rules as unpinned tabs).
     return dropTab(win, row, event);
+  }
+
+  function dropLinksInNaps(element, napsBranch, event) {
+    const napBranch = element.closest('.branch.nap');
+    // On the Naps heading: make a new nap out of them.
+    if (!napBranch) return { target: { nap: true }, indicator: inside(headerRow(napsBranch)) };
+    const napId = napBranch.dataset.napId;
+    const linkRow = element.closest('.row.link');
+    if (!linkRow) return { target: { napMove: true, napId }, indicator: inside(headerRow(napBranch)) };
+    const linkId = linkRow.dataset.linkId;
+    if (source.items.some((link) => link.id === linkId)) return null; // onto itself
+    const before = pointerRatio(linkRow, event) < 0.5;
+    return {
+      target: { napMove: true, napId, [before ? 'beforeLinkId' : 'afterLinkId']: linkId },
+      indicator: { element: linkRow, className: before ? 'drop-before' : 'drop-after' },
+    };
+  }
+
+  // A nap counts as one block: top half of another nap = before it, bottom half = after.
+  function dropNapInNaps(element, event) {
+    const napBranch = element.closest('.branch.nap');
+    if (!napBranch || napBranch.dataset.napId === source.item.id) return null;
+    const before = pointerRatio(napBranch, event) < 0.5;
+    return before
+      ? {
+          target: { napOrder: true, beforeNapId: napBranch.dataset.napId },
+          indicator: { element: headerRow(napBranch), className: 'drop-before' },
+        }
+      : {
+          target: { napOrder: true, afterNapId: napBranch.dataset.napId },
+          indicator: { element: napBranch, className: 'drop-after' },
+        };
   }
 
   function dropWindow(win, windowBranch) {
@@ -172,12 +258,12 @@ export function enableDragAndDrop({ root, tree, newWindowZone, model, expand, on
   }
 
   function dropTab(win, row, event) {
-    const tabs = source.items;
+    const tabs = source.kind === 'tab' ? source.items : []; // napped links/naps aren't tabs yet
     const isDragged = (tab) => tabs.some((t) => t.id === tab.id);
     // Pinned tabs always sit at the front of a window and can't be grouped.
     // When the dragged tabs mix pinned and unpinned, the unpinned ones decide
     // where things go and the pinned ones stay pinned (see moveTabs).
-    const allPinned = tabs.every((t) => t.pinned);
+    const allPinned = tabs.length > 0 && tabs.every((t) => t.pinned);
     const branch = row.parentElement.closest('.branch');
 
     // Onto a window's own row: move to the end of that window.
@@ -254,8 +340,16 @@ export function enableDragAndDrop({ root, tree, newWindowZone, model, expand, on
     };
   }
 
+  function sourceIsIncognito() {
+    if (source.kind === 'links' || source.kind === 'nap') return false;
+    if (source.kind === 'window') return source.item.incognito;
+    if (source.kind === 'group') return Boolean(model.window(source.item.windowId)?.incognito);
+    return source.items.some((tab) => tab.incognito);
+  }
+
   // Chrome can't move tabs between incognito and regular windows.
   function sourceFitsWindow(win) {
+    if (source.kind === 'links' || source.kind === 'nap') return !win.incognito;
     if (source.kind === 'window') return source.item.incognito === win.incognito;
     if (source.kind === 'group') return Boolean(model.window(source.item.windowId)?.incognito) === win.incognito;
     return source.items.every((tab) => tab.incognito === win.incognito);

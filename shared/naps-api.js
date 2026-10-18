@@ -1,25 +1,30 @@
 // shared/naps-api.js
 //
-// Naps: Tabbies' version of OneTab. Napping saves tabs' addresses and titles
+// Naps: close tabs now, open them later. Napping saves tabs' addresses and titles
 // to a list and closes the tabs, freeing their memory; waking opens them
-// again. The lists live in chrome.storage.local, the extension's own storage
-// on this computer ("storage" permission). Nothing leaves your browser.
+// again.
 //
-// chrome.storage.local holds two keys:
-//   naps:     Nap[], newest first
-//             Nap  = { id, title, createdAt, color?, links: Link[] }
-//                    (title '' = named by its date; color = the tab group it came from)
-//             Link = { id, url, title, favIconUrl }
-//   settings: { keepAfterWaking: boolean }
+// The lists are kept by one of two stores (naps-store.js): this computer's
+// extension storage, or, with Settings → "Sync naps" on, a bookmarks folder
+// that Chrome Sync copies to your other computers.
+//   Nap  = { id, title, createdAt, color?, links: Link[] }
+//          (title '' = named by its date; color = the tab group it came from)
+//   Link = { id, url, title, favIconUrl }
+// The Naps options (keepAfterWaking, napPinned, syncNaps) are in settings-api.js.
 //
-// Every change is a read-modify-write of the whole list. All open Tabbies
-// views hear about it through chrome.storage.onChanged (see subscribe() in
-// chrome-api.js) and refresh.
+// All open Tabbies views hear about changes (chrome.storage.onChanged or
+// chrome.bookmarks events, see subscribe() in chrome-api.js) and refresh.
 //
 // Functions that change things return an "undo" object; pass it to the
 // matching undo function to reverse the change.
 
-import { formatOneTab, isRestorableUrl, napName, parseOneTab } from './nap-data.js';
+import { formatNapText, isRestorableUrl, napName, parseNapText } from './nap-data.js';
+import { readSettings, saveSettings } from './settings-api.js';
+import { bookmarkStore, localStore } from './naps-store.js';
+// Waking links at a drop spot reuses the tab-moving code. (chrome-api.js
+// imports this file too; that's fine because moveTabs is only used later,
+// inside a function, not while the files are loading.)
+import { moveTabs } from './chrome-api.js';
 
 const NO_GROUP = -1;
 // Tabbies' own pages, e.g. chrome-extension://<id>/tabbies.html
@@ -29,22 +34,58 @@ const BLANK_PAGES = ['chrome://newtab/', 'chrome://new-tab-page/', 'about:blank'
 
 // ---- Reading and writing --------------------------------------------------------------------
 
-/** @returns {Promise<{naps: object[], settings: {keepAfterWaking: boolean}}>} */
+/** The store in use: bookmarks while syncing (and allowed to), otherwise this computer. */
+async function store() {
+  const { syncNaps } = await readSettings();
+  // chrome.bookmarks only exists while the optional "bookmarks" permission is granted.
+  return syncNaps && chrome.bookmarks ? bookmarkStore : localStore;
+}
+
+/** @returns {Promise<{naps: object[]}>} */
 export async function readNaps() {
-  // chrome.storage.local.get returns the stored values for the keys asked for
-  // (missing keys are simply absent, hence the defaults).
-  const { naps = [], settings = {} } = await chrome.storage.local.get(['naps', 'settings']);
-  return { naps, settings: { keepAfterWaking: false, ...settings } };
+  return { naps: await (await store()).read() };
 }
 
-async function writeNaps(naps) {
-  // chrome.storage.local.set saves values (as JSON) under their keys.
-  await chrome.storage.local.set({ naps });
+// ---- Syncing through bookmarks -------------------------------------------------------------
+
+/**
+ * Asks for the "bookmarks" permission. Chrome only shows the request in direct
+ * response to a click, so call this right in the click/change handler.
+ * @returns {Promise<boolean>} whether it was granted
+ */
+export function requestSyncPermission() {
+  // chrome.permissions.request asks for a permission listed under
+  // "optional_permissions" in manifest.json; Chrome shows the user a prompt.
+  return chrome.permissions.request({ permissions: ['bookmarks'] });
 }
 
-export async function setNapSettings(changes) {
-  const { settings } = await readNaps();
-  await chrome.storage.local.set({ settings: { ...settings, ...changes } });
+/**
+ * Turns nap syncing on: moves this computer's naps into the synced bookmarks
+ * folder (on top of any that arrived from other computers).
+ */
+export async function startNapSync() {
+  const local = await localStore.read();
+  for (const [index, nap] of local.entries()) await bookmarkStore.addNap(nap, index);
+  await chrome.storage.local.remove('naps');
+  await saveSettings({ syncNaps: true });
+}
+
+/**
+ * Turns nap syncing off: copies the synced naps to this computer and gives
+ * the "bookmarks" permission back. The bookmarks folder stays, so your other
+ * computers keep their naps; delete it in the bookmark manager if you like.
+ */
+export async function stopNapSync() {
+  if (chrome.bookmarks) {
+    const synced = await bookmarkStore.read();
+    for (const nap of synced) {
+      const links = nap.links.map(({ id, ...link }) => link);
+      await localStore.addNap({ ...nap, id: undefined, links }, -1);
+    }
+  }
+  await saveSettings({ syncNaps: false });
+  // chrome.permissions.remove gives an optional permission back.
+  await chrome.permissions.remove({ permissions: ['bookmarks'] }).catch(() => {});
 }
 
 // ---- Napping -------------------------------------------------------------------------------
@@ -66,17 +107,13 @@ export async function napTabs(tabIds, { intoNapId, title = '', color } = {}) {
   );
   if (tabs.length === 0) return null;
 
-  const links = tabs.map(toLink);
-  const { naps } = await readNaps();
-  const into = intoNapId ? naps.findIndex((nap) => nap.id === intoNapId) : -1;
-  const next =
-    into === -1
-      ? [{ id: crypto.randomUUID(), title, color, createdAt: Date.now(), links }, ...naps]
-      : naps.with(into, { ...naps[into], links: [...naps[into].links, ...links] });
-
-  // Save first, then close: if closing fails, the tabs are both open and saved.
+  const naps = await store();
   const groups = await groupsOf(tabs);
-  await writeNaps(next);
+  // Save first, then close: if closing fails, the tabs are both open and saved.
+  const existing = intoNapId && (await naps.read()).some((nap) => nap.id === intoNapId);
+  const links = existing
+    ? await naps.appendLinks(intoNapId, tabs.map(toLink))
+    : (await naps.addNap({ title, color, createdAt: Date.now(), links: tabs.map(toLink) }, 0)).links;
   // chrome.tabs.remove closes tabs; it takes one id or a list of ids.
   await chrome.tabs.remove(tabs.map((tab) => tab.id));
 
@@ -94,22 +131,28 @@ export async function napTabs(tabIds, { intoNapId, title = '', color } = {}) {
   };
 }
 
-/** Naps every unpinned tab of a window (pinned tabs are kept, like in OneTab). */
+/**
+ * Naps the tabs of a window. Pinned tabs stay open unless
+ * the "Nap pinned tabs too" setting is on.
+ */
 export async function napWindow(windowId) {
-  const tabs = await chrome.tabs.query({ windowId });
-  return napTabs(tabs.filter((tab) => !tab.pinned).map((tab) => tab.id));
+  const [tabs, { napPinned }] = await Promise.all([chrome.tabs.query({ windowId }), readSettings()]);
+  return napTabs(tabs.filter((tab) => napPinned || !tab.pinned).map((tab) => tab.id));
 }
 
-/** Naps every unpinned tab in every window, into one nap. */
+/** Naps the tabs of every window into one nap (pinned ones as in napWindow). */
 export async function napAllWindows() {
-  // windowType: 'normal' leaves out popups, app windows and DevTools.
-  const tabs = await chrome.tabs.query({ windowType: 'normal' });
-  return napTabs(tabs.filter((tab) => !tab.pinned).map((tab) => tab.id));
+  const [tabs, { napPinned }] = await Promise.all([
+    // windowType: 'normal' leaves out popups, app windows and DevTools.
+    chrome.tabs.query({ windowType: 'normal' }),
+    readSettings(),
+  ]);
+  return napTabs(tabs.filter((tab) => napPinned || !tab.pinned).map((tab) => tab.id));
 }
 
 /** Reverses napTabs(): takes the links out of the nap and reopens the tabs where they were. */
 export async function undoNap(undo) {
-  await removeLinks(undo.linkIds);
+  await (await store()).removeLinks(undo.linkIds);
   await reopenTabs(undo.tabs);
 }
 
@@ -127,7 +170,7 @@ export async function undoNap(undo) {
  * @returns {Promise<object|null>} undo info for undoWake()
  */
 export async function wakeNap(napId, { linkIds, where = 'here', activate = false } = {}) {
-  const { naps, settings } = await readNaps();
+  const [naps, settings] = await Promise.all([store().then((s) => s.read()), readSettings()]);
   const index = naps.findIndex((nap) => nap.id === napId);
   if (index === -1) return null;
   const nap = naps[index];
@@ -160,17 +203,64 @@ export async function wakeNap(napId, { linkIds, where = 'here', activate = false
   // Links that opened leave the nap (unless the setting says to keep them);
   // a nap with no links left disappears.
   if (!settings.keepAfterWaking) {
-    const wokenIds = new Set(opened.map((item) => item.link.id));
-    const remaining = nap.links.filter((link) => !wokenIds.has(link.id));
-    await writeNaps(remaining.length > 0 ? naps.with(index, { ...nap, links: remaining }) : naps.toSpliced(index, 1));
+    await (await store()).removeLinks(opened.map((item) => item.link.id));
   }
-  return { count: tabIds.length, tabIds, nap, index };
+  return { count: tabIds.length, tabIds, before: [{ nap, index }] };
+}
+
+/**
+ * Wakes links (from one or more naps) right where they were dropped: a spot
+ * in a window, a tab group, the end of a window, or a new window. `target` is
+ * a MoveTarget (see chrome-api.js); a target without windowId means the
+ * current window. With `group`, the woken tabs become a tab group with that
+ * { title, color } (used for a nap that was napped from a group).
+ * @returns {Promise<object|null>} undo info for undoWake()
+ */
+export async function wakeLinks(linkIds, target = {}, { group } = {}) {
+  const [naps, settings] = await Promise.all([store().then((s) => s.read()), readSettings()]);
+  const all = naps.flatMap((nap) => nap.links);
+  const links = linkIds.map((id) => all.find((link) => link.id === id)).filter(Boolean);
+  if (links.length === 0) return null;
+  const before = naps
+    .map((nap, index) => ({ nap, index }))
+    .filter(({ nap }) => nap.links.some((link) => linkIds.includes(link.id)));
+
+  let windowId;
+  let opened;
+  if (target.newWindow) {
+    const win = await chrome.windows.create({ url: links[0].url, focused: false });
+    windowId = win.id;
+    opened = [{ link: links[0], tabId: win.tabs[0].id }, ...(await openLinks(links.slice(1), windowId, false))];
+  } else {
+    windowId = target.windowId ?? (await chrome.windows.getCurrent()).id;
+    // Open them at the end of the window, then move them into place with the
+    // same code that moves tabs when you drag them (it handles tab groups).
+    opened = await openLinks(links, windowId, false);
+    const placed =
+      target.beforeTabId !== undefined || target.afterTabId !== undefined || (target.groupId ?? NO_GROUP) !== NO_GROUP;
+    if (placed) {
+      await moveTabs(
+        opened.map((item) => ({ id: item.tabId, pinned: false, incognito: false })),
+        { ...target, windowId },
+      );
+    }
+  }
+  const tabIds = opened.map((item) => item.tabId);
+
+  if (group && tabIds.length > 0 && (target.groupId ?? NO_GROUP) === NO_GROUP) {
+    const groupId = await chrome.tabs.group({ tabIds, createProperties: { windowId } });
+    await chrome.tabGroups.update(groupId, { title: group.title, color: group.color ?? 'grey' });
+  }
+  if (!settings.keepAfterWaking) {
+    await (await store()).removeLinks(opened.map((item) => item.link.id));
+  }
+  return { count: tabIds.length, tabIds, before };
 }
 
 /** Reverses wakeNap(): closes the woken tabs and puts the nap back as it was. */
 export async function undoWake(undo) {
   await chrome.tabs.remove(undo.tabIds).catch(() => {}); // some may be closed already
-  await putBackNap(undo);
+  await putBackNaps(undo);
 }
 
 /** Opens links as tabs at the end of a window. A link that fails to open is skipped. */
@@ -192,42 +282,64 @@ async function openLinks(links, windowId, activateFirst) {
 
 /** Deletes some links of a nap, or the whole nap when linkIds is omitted. Returns undo info. */
 export async function deleteFromNap(napId, linkIds) {
-  const { naps } = await readNaps();
-  const index = naps.findIndex((nap) => nap.id === napId);
+  const naps = await store();
+  const all = await naps.read();
+  const index = all.findIndex((nap) => nap.id === napId);
   if (index === -1) return null;
-  const nap = naps[index];
-  const remaining = linkIds ? nap.links.filter((link) => !linkIds.includes(link.id)) : [];
-  await writeNaps(remaining.length > 0 ? naps.with(index, { ...nap, links: remaining }) : naps.toSpliced(index, 1));
-  return { nap, index };
+  if (linkIds) await naps.removeLinks(linkIds);
+  else await naps.removeNap(napId);
+  return { nap: all[index], index };
 }
 
-/** Undo for deleteFromNap(): puts the nap back exactly as it was. */
+/** Undo for deleteFromNap() and wakeNap(): puts the nap back as it was, at its old place. */
 export async function putBackNap({ nap, index }) {
-  const { naps } = await readNaps();
-  const at = naps.findIndex((other) => other.id === nap.id);
-  await writeNaps(at === -1 ? naps.toSpliced(Math.min(index, naps.length), 0, nap) : naps.with(at, nap));
+  const naps = await store();
+  await naps.removeNap(nap.id); // whatever is left of it
+  const count = (await naps.read()).length;
+  // (In the bookmarks store the nap gets new ids; nothing refers to the old ones any more.)
+  await naps.addNap(nap, Math.min(index, count));
+}
+
+/** Deletes links from whichever naps hold them. Returns undo info for putBackNaps(). */
+export async function deleteLinks(linkIds) {
+  const naps = await store();
+  const all = await naps.read();
+  const before = all
+    .map((nap, index) => ({ nap, index }))
+    .filter(({ nap }) => nap.links.some((link) => linkIds.includes(link.id)));
+  await naps.removeLinks(linkIds);
+  return { before, count: linkIds.length };
+}
+
+/** Puts several naps back as they were (undo for deleteLinks and waking). */
+export async function putBackNaps({ before }) {
+  for (const item of [...before].sort((a, b) => a.index - b.index)) await putBackNap(item);
+}
+
+/** Moves links to another spot in the naps: { napId, beforeLinkId? | afterLinkId? } or { newNap: true }. */
+export async function moveNapLinks(linkIds, to) {
+  await (await store()).moveLinks(linkIds, to);
+}
+
+/** Reorders a nap: { beforeNapId } or { afterNapId }. */
+export async function moveNap(napId, to) {
+  await (await store()).moveNap(napId, to);
 }
 
 export async function renameNap(napId, title) {
-  const { naps } = await readNaps();
-  await writeNaps(naps.map((nap) => (nap.id === napId ? { ...nap, title } : nap)));
+  await (await store()).rename(napId, title);
 }
 
-// ---- OneTab import / export ----------------------------------------------------------------
+// ---- Import / export as text --------------------------------------------------------------
 
-/** Adds the lists from OneTab text (see nap-data.js) after the existing naps. */
-export async function importOneTab(text) {
-  const lists = parseOneTab(text);
-  const now = Date.now();
-  const imported = lists.map((list) => ({
-    id: crypto.randomUUID(),
-    title: 'Imported from OneTab',
-    createdAt: now,
-    links: list.links.map((link) => ({ id: crypto.randomUUID(), url: link.url, title: link.title, favIconUrl: '' })),
-  }));
-  if (imported.length > 0) {
-    const { naps } = await readNaps();
-    await writeNaps([...naps, ...imported]);
+/** Adds the lists from text (see nap-data.js) after the existing naps. */
+export async function importNaps(text) {
+  const lists = parseNapText(text);
+  const naps = await store();
+  const imported = [];
+  for (const list of lists) {
+    const links = list.links.map((link) => ({ url: link.url, title: link.title, favIconUrl: '' }));
+    imported.push(await naps.addNap({ title: 'Imported', createdAt: Date.now(), links }, -1));
   }
   return {
     lists: imported.length,
@@ -236,16 +348,16 @@ export async function importOneTab(text) {
   };
 }
 
-/** Undo for importOneTab(). */
+/** Undo for importNaps(). */
 export async function removeImported({ napIds }) {
-  const { naps } = await readNaps();
-  await writeNaps(naps.filter((nap) => !napIds.includes(nap.id)));
+  const naps = await store();
+  for (const id of napIds) await naps.removeNap(id);
 }
 
-/** All naps as OneTab text. */
-export async function exportOneTab() {
+/** All naps as text. */
+export async function exportNaps() {
   const { naps } = await readNaps();
-  return formatOneTab(naps);
+  return formatNapText(naps);
 }
 
 // ---- Internals ----------------------------------------------------------------------------
@@ -258,7 +370,6 @@ function isNappable(tab) {
 function toLink(tab) {
   const url = tab.url || tab.pendingUrl;
   return {
-    id: crypto.randomUUID(),
     url,
     title: tab.title || url,
     // Keep web icons only; data: icons can be large and chrome:// ones can't be shown.
@@ -272,17 +383,6 @@ async function groupsOf(tabs) {
   // chrome.tabGroups.get returns one group's title, color and collapsed state.
   const groups = await Promise.all(ids.map((id) => chrome.tabGroups.get(id).catch(() => null)));
   return new Map(groups.filter(Boolean).map((g) => [g.id, { id: g.id, title: g.title, color: g.color }]));
-}
-
-/** Removes links (by id) from whichever naps hold them; emptied naps disappear. */
-async function removeLinks(linkIds) {
-  const ids = new Set(linkIds);
-  const { naps } = await readNaps();
-  await writeNaps(
-    naps
-      .map((nap) => ({ ...nap, links: nap.links.filter((link) => !ids.has(link.id)) }))
-      .filter((nap) => nap.links.length > 0),
-  );
 }
 
 /**

@@ -18,16 +18,20 @@
 //   api.sortWindow(windowId, orderId)  → Promise<Layout>  (sort menu, see sorting.js)
 //   api.arrangeWindow(windowId, layout) → Promise         (undo a sort)
 //   api.napTabs / napWindow / napAllWindows / wakeNap / deleteFromNap / renameNap /
-//   importOneTab / exportOneTab / setNapSettings, and their undo functions
+//   importNaps / exportNaps, and their undo functions (Naps, see naps-api.js)
+//   api.saveSettings(changes)          → Promise   (see settings-api.js)
 //                                       (Naps, see naps-api.js)
 
+import { h } from './dom.js';
 import { icon } from './icons.js';
 import { enableDragAndDrop } from './drag-drop.js';
 import { SORT_ORDERS } from './sorting.js';
 import { formatNapDate, napName } from './nap-data.js';
 
-// The Tab Nap cat (icons/nap.svg) marks everything to do with Naps.
-const NAP_ICON_URL = '/icons/nap.svg';
+// The Tab Nap cat marks everything to do with Naps: the full drawing where
+// it's shown large, a simplified one for buttons and headings.
+const NAP_PICTURE_URL = '/icons/nap.svg';
+const NAP_ICON_URL = '/icons/nap-small.svg';
 
 /**
  * Builds the explorer inside `container` and keeps it up to date.
@@ -62,6 +66,10 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
   // selects a range from the anchor (the last tab clicked), Ctrl+A selects all.
   const selection = new Set(); // tab ids
   let selectionAnchor = null; // tab id
+  // Napped links are selected the same way (but never together with tabs).
+  const linkSelection = new Set(); // link ids
+  let linkAnchor = null; // link id
+  let linksById = new Map(); // link id → { ...link, napId }
   let selectionSeeded = false; // Chrome's own multi-selected tabs are picked up once
   let counts = { total: 0, shown: 0, windows: 0, searching: false }; // for the summary line
   let menuItems = []; // what each item of the open menu does
@@ -105,8 +113,10 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
     'div',
     { class: 'selection-bar', hidden: true },
     selectionCount,
-    h('button', { type: 'button', 'data-selection': 'nap' }, napIcon(), 'Nap'),
-    h('button', { type: 'button', 'data-selection': 'new-window' }, icon('newWindow'), 'New window'),
+    h('button', { type: 'button', 'data-selection': 'nap', 'data-for': 'tabs' }, napIcon(), 'Nap'),
+    h('button', { type: 'button', 'data-selection': 'new-window', 'data-for': 'tabs' }, icon('newWindow'), 'New window'),
+    h('button', { type: 'button', 'data-selection': 'wake', 'data-for': 'links', title: 'Open them in this window' }, icon('wake'), 'Wake'),
+    h('button', { type: 'button', 'data-selection': 'delete', 'data-for': 'links' }, icon('close'), 'Delete'),
     h('button', { type: 'button', 'data-selection': 'clear', title: 'Clear the selection (Esc)' }, 'Clear'),
   );
 
@@ -194,7 +204,9 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
       tab: (id) => tabsById.get(id),
       group: (id) => groupsById.get(id),
       window: (id) => windowsById.get(id),
+      nap: (id) => napsById.get(id),
       selectionFor,
+      linkSelectionFor,
     },
     expand: (toggle) => setExpanded(toggle, true),
     onDrop: moveItem,
@@ -255,6 +267,7 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
     groupsById = new Map();
     windowsById = new Map();
     napsById = new Map(snapshot.naps.map((nap) => [nap.id, nap]));
+    linksById = new Map(snapshot.naps.flatMap((nap) => nap.links.map((link) => [link.id, { ...link, napId: nap.id }])));
     for (const win of snapshot.windows) {
       windowsById.set(win.id, win);
       for (const child of win.children) {
@@ -479,7 +492,11 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
     const header = [
       napIcon('node-icon'),
       h('span', { class: 'label' }, 'Naps'),
-      h('span', { class: 'hint' }, 'Tabs closed and kept for later'),
+      h(
+        'span',
+        { class: 'hint' },
+        snapshot.settings.syncNaps ? 'Synced with your Chrome profile' : 'Tabs closed and kept for later',
+      ),
       h('span', { class: 'count' }, countLabel(shown, total, ctx)),
     ];
     const menuButton = moreButton('naps-menu', 'naps:menu', 'Nap options, import and export');
@@ -490,7 +507,7 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
             h(
               'div',
               { class: 'naps-empty' },
-              h('img', { src: NAP_ICON_URL, alt: '', width: 56, height: 56, draggable: 'false' }),
+              h('img', { src: NAP_PICTURE_URL, alt: '', width: 56, height: 56, draggable: 'false' }),
               h(
                 'p',
                 {},
@@ -552,7 +569,7 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
       children,
       actions: [wakeButton, moreButton('nap-menu', `nap:${nap.id}:menu`, `More for ${name}`)],
       attributes: { 'data-nap-id': nap.id },
-      draggable: false,
+      dragLabel: 'Drag onto a window to wake it there, or up and down to reorder',
     });
     return { element, shown: children.length };
   }
@@ -604,7 +621,15 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
     const nap = napsById.get(button.closest('[data-nap-id]')?.dataset.napId);
     if (nap) {
       const linkId = button.closest('[data-link-id]')?.dataset.linkId;
-      if (action === 'wake-link') wake(nap, { linkIds: [linkId], where: 'here', activate: true });
+      if (action === 'wake-link') {
+        const ctrl = event.ctrlKey || event.metaKey;
+        if (event.shiftKey) selectLinkRange(linkId, ctrl);
+        else if (ctrl) toggleLinkSelected(linkId);
+        else {
+          setSelection([]);
+          wake(nap, { linkIds: [linkId], where: 'here', activate: true });
+        }
+      }
       else if (action === 'delete-link') deleteAndOfferUndo(nap, [linkId]);
       else if (action === 'wake-nap') wake(nap, { where: nap.color ? 'group' : 'here' });
       else if (action === 'nap-menu') openNapMenu(button, nap);
@@ -635,6 +660,10 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
 
   /** Called by drag-drop.js with what was dropped and the MoveTarget it resolved. */
   function moveItem(source, target) {
+    if (source.kind === 'links' || source.kind === 'nap') {
+      moveNapped(source, target);
+      return;
+    }
     if (target.nap) {
       // Dropped on the nap zone, the Naps section (new nap) or one nap (add to it).
       const intoNapId = target.napId;
@@ -655,6 +684,27 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
       act(api.moveGroup(source.item, target), `Moved group “${name}” to ${where}`);
     } else {
       act(api.mergeWindow(source.item, target.windowId), `Merged its tabs into ${where}`);
+    }
+  }
+
+  /** Napped links or a whole nap were dropped: rearrange the naps, or wake them there. */
+  function moveNapped(source, target) {
+    const linkIds = source.kind === 'links' ? source.items.map((link) => link.id) : source.item.links.map((l) => l.id);
+    if (target.napOrder) {
+      act(api.moveNap(source.item.id, target), `Moved “${napName(source.item)}”`);
+    } else if (target.napMove || target.nap) {
+      const to = target.napMove ? target : { newNap: true };
+      act(api.moveNapLinks(linkIds, to), `Moved ${plural(linkIds.length, 'link')}`);
+    } else {
+      // A nap that came from a tab group wakes as that group again.
+      const group = source.kind === 'nap' && source.item.color ? { title: napName(source.item), color: source.item.color } : undefined;
+      setSelection([]);
+      api.wakeLinks(linkIds, target, { group }).then(
+        (undo) => {
+          if (undo) showToast(`Woke ${plural(undo.count, 'tab')}`, 'Undo', () => act(api.undoWake(undo), 'Wake undone'));
+        },
+        (error) => showError('wake those', error),
+      );
     }
   }
 
@@ -720,8 +770,9 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
   //   Ctrl+A  select every tab you can see (e.g. all search results)
   //   Esc     clear the selection
   function onDocumentKeydown(event) {
-    // Already handled (e.g. Esc clearing the search), or meant for a menu or dialog.
-    if (event.defaultPrevented || menu.contains(event.target) || dialog.open) return;
+    // Already handled (e.g. Esc clearing the search), meant for a menu or
+    // dialog, or the explorer is hidden (Settings is showing).
+    if (event.defaultPrevented || menu.contains(event.target) || dialog.open || !container.checkVisibility()) return;
     const typing =
       event.target instanceof Element && event.target.closest('input, textarea, select, [contenteditable]');
     const ctrl = event.ctrlKey || event.metaKey;
@@ -732,7 +783,7 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
     } else if (event.key.toLowerCase() === 'a' && ctrl && !event.altKey && !event.shiftKey && !typing) {
       event.preventDefault();
       setSelection(visibleTabIds());
-    } else if (event.key === 'Escape' && selection.size > 0 && !(typing && searchInput.value)) {
+    } else if (event.key === 'Escape' && selection.size + linkSelection.size > 0 && !(typing && searchInput.value)) {
       // In the popup this also stops Esc from closing it while tabs are selected.
       event.preventDefault();
       setSelection([]);
@@ -774,11 +825,13 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
 
   function setSelection(ids) {
     selection.clear();
+    linkSelection.clear();
     for (const id of ids) selection.add(id);
     showSelection();
   }
 
   function toggleSelected(tabId) {
+    linkSelection.clear();
     if (selection.has(tabId)) selection.delete(tabId);
     else selection.add(tabId);
     selectionAnchor = tabId;
@@ -795,8 +848,48 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
       return;
     }
     if (!addToSelection) selection.clear();
+    linkSelection.clear();
     for (const id of ids.slice(Math.min(from, to), Math.max(from, to) + 1)) selection.add(id);
     showSelection();
+  }
+
+  /** Ids of the napped-link rows you can see right now, top to bottom. */
+  function visibleLinkIds() {
+    return visibleRows()
+      .filter((row) => row.matches('.link'))
+      .map((row) => row.dataset.linkId);
+  }
+
+  function toggleLinkSelected(linkId) {
+    selection.clear();
+    if (linkSelection.has(linkId)) linkSelection.delete(linkId);
+    else linkSelection.add(linkId);
+    linkAnchor = linkId;
+    showSelection();
+  }
+
+  function selectLinkRange(linkId, addToSelection) {
+    const ids = visibleLinkIds();
+    const from = ids.indexOf(linkAnchor);
+    const to = ids.indexOf(linkId);
+    if (from === -1) {
+      toggleLinkSelected(linkId);
+      return;
+    }
+    selection.clear();
+    if (!addToSelection) linkSelection.clear();
+    for (const id of ids.slice(Math.min(from, to), Math.max(from, to) + 1)) linkSelection.add(id);
+    showSelection();
+  }
+
+  /** Like selectionFor, for napped links: the whole link selection, or just that link. */
+  function linkSelectionFor(linkId) {
+    if (!linkSelection.has(linkId)) {
+      if (selection.size > 0 || linkSelection.size > 0) setSelection([]);
+      const link = linksById.get(linkId);
+      return link ? [link] : [];
+    }
+    return [...linksById.values()].filter((link) => linkSelection.has(link.id));
   }
 
   /** Shift+↑/↓: move to the next tab row and select from the anchor to it. */
@@ -812,6 +905,8 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
   function pruneSelection() {
     const visible = new Set(visibleTabIds());
     for (const id of selection) if (!visible.has(id)) selection.delete(id);
+    const visibleLinks = new Set(visibleLinkIds());
+    for (const id of linkSelection) if (!visibleLinks.has(id)) linkSelection.delete(id);
     showSelection();
   }
 
@@ -819,8 +914,15 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
     for (const row of tree.querySelectorAll('.tab')) {
       row.classList.toggle('is-selected', selection.has(Number(row.dataset.tabId)));
     }
-    selectionBar.hidden = selection.size === 0;
-    selectionCount.textContent = `${plural(selection.size, 'tab')} selected`;
+    for (const row of tree.querySelectorAll('.link')) {
+      row.classList.toggle('is-selected', linkSelection.has(row.dataset.linkId));
+    }
+    // The bar offers what fits: Nap / New window for tabs, Wake / Delete for napped links.
+    const mode = linkSelection.size > 0 ? 'links' : 'tabs';
+    const count = mode === 'links' ? linkSelection.size : selection.size;
+    selectionBar.hidden = count === 0;
+    selectionCount.textContent = `${plural(count, mode === 'links' ? 'link' : 'tab')} selected`;
+    for (const button of selectionBar.querySelectorAll('[data-for]')) button.hidden = button.dataset.for !== mode;
     updateSummary();
   }
 
@@ -862,6 +964,7 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
     menuItems = items;
     menuOpenerKey = button.dataset.focusKey;
     menu.setAttribute('aria-label', title);
+    const footer = note ? [h('p', { class: 'menu-note' }, note)] : [];
     menu.replaceChildren(
       h('p', { class: 'menu-title' }, title),
       ...items.map((item, index) =>
@@ -878,7 +981,7 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
           item.hint && h('span', { class: 'menu-hint' }, item.hint),
         ),
       ),
-      note && h('p', { class: 'menu-note' }, note),
+      ...footer,
     );
     menu.showPopover();
     // Place it under the button, flipped up if there's no room below.
@@ -959,10 +1062,7 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
         }
         showToast(`Napped ${plural(undo.count, 'tab')}`, 'Undo', () => act(api.undoNap(undo), 'Nap undone'));
       },
-      (error) => {
-        console.warn('Tabbies: could not nap', error);
-        refresh();
-      },
+      (error) => showError('nap', error),
     );
   }
 
@@ -974,10 +1074,7 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
         if (options.activate) onTabActivated();
         showToast(`Woke ${plural(undo.count, 'tab')}`, 'Undo', () => act(api.undoWake(undo), 'Wake undone'));
       },
-      (error) => {
-        console.warn('Tabbies: could not wake', error);
-        refresh();
-      },
+      (error) => showError('wake', error),
     );
   }
 
@@ -988,7 +1085,7 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
         const what = linkIds ? plural(linkIds.length, 'link') : `“${napName(nap)}”`;
         showToast(`Deleted ${what}`, 'Undo', () => act(api.putBackNap(undo), 'Delete undone'));
       },
-      (error) => console.warn('Tabbies: could not delete', error),
+      (error) => showError('delete', error),
     );
   }
 
@@ -1006,7 +1103,7 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
   }
 
   function openNapsMenu(button) {
-    const keep = Boolean(snapshot?.napSettings.keepAfterWaking);
+    const keep = Boolean(snapshot?.settings.keepAfterWaking);
     openMenu(button, {
       title: 'Naps',
       items: [
@@ -1015,13 +1112,13 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
           hint: 'All tabs except pinned ones, into one nap',
           run: () => napAndOfferUndo(api.napAllWindows()),
         },
-        { label: 'Import from OneTab…', run: importDialog },
-        { label: 'Export for OneTab…', run: exportDialog },
+        { label: 'Import links…', run: importDialog },
+        { label: 'Export links…', run: exportDialog },
         {
           label: 'Keep links after waking',
           hint: 'Waking opens tabs but leaves the nap as it is',
           checked: keep,
-          run: () => act(api.setNapSettings({ keepAfterWaking: !keep })),
+          run: () => act(api.saveSettings({ keepAfterWaking: !keep })),
         },
       ],
     });
@@ -1070,14 +1167,14 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
 
   function importDialog() {
     openDialog({
-      title: 'Import from OneTab',
+      title: 'Import links',
       text:
-        'In OneTab, open "Export / Import URLs", copy everything under Export, and paste it here. ' +
+        'Paste links, one per line as "URL | Title". A blank line starts a new nap. ' +
         'Each line is "URL | Title", and a blank line starts a new list.',
       area: { placeholder: 'https://example.com | Example page' },
       confirmLabel: 'Import',
       onConfirm: (value) =>
-        api.importOneTab(value).then(
+        api.importNaps(value).then(
           (undo) => {
             if (undo.count === 0) {
               showToast('No links found to import');
@@ -1092,10 +1189,10 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
   }
 
   async function exportDialog() {
-    const text = await api.exportOneTab();
+    const text = await api.exportNaps();
     openDialog({
-      title: 'Export for OneTab',
-      text: 'Copy this into OneTab\'s "Import URLs" box, or keep it as a backup. Import it back here any time.',
+      title: 'Export links',
+      text: 'Your naps as text, one "URL | Title" per line. Keep it as a backup, or import it back here any time.',
       area: { value: text, readOnly: true, placeholder: 'Nothing is napping yet.' },
       confirmLabel: 'Copy',
       onConfirm: () =>
@@ -1112,6 +1209,19 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
   function onSelectionBarClick(event) {
     const button = event.target.closest('[data-selection]');
     if (!button) return;
+    const action = button.dataset.selection;
+    if (action === 'wake' || action === 'delete') {
+      const ids = [...linksById.keys()].filter((id) => linkSelection.has(id)); // in list order
+      setSelection([]);
+      if (action === 'wake') moveNapped({ kind: 'links', items: ids.map((id) => linksById.get(id)) }, {});
+      else {
+        api.deleteLinks(ids).then(
+          (undo) => showToast(`Deleted ${plural(undo.count, 'link')}`, 'Undo', () => act(api.putBackNaps(undo), 'Delete undone')),
+          (error) => showError('delete those', error),
+        );
+      }
+      return;
+    }
     const tabs = selectionFor([...selection][0] ?? -1);
     if (button.dataset.selection === 'nap') {
       napAndOfferUndo(api.napTabs(tabs.map((tab) => tab.id)));
@@ -1157,13 +1267,17 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
     promise.then(
       () => {
         if (successMessage) announcer.textContent = successMessage;
+        refresh(); // show the result right away instead of waiting for Chrome's events
       },
-      (error) => {
-        // Usually the tab was closed between the last refresh and the click.
-        console.warn('Tabbies:', error);
-        refresh();
-      },
+      (error) => showError('do that', error),
     );
+  }
+
+  /** Something failed: say so at the bottom (and in the console), and show the current state. */
+  function showError(what, error) {
+    console.warn('Tabbies:', error);
+    showToast(`Couldn’t ${what}: ${error?.message ?? error}`);
+    refresh();
   }
 
   function focusSearch() {
@@ -1293,7 +1407,7 @@ function buildTabRow(tab, depth) {
 function buildLinkRow(link, nap) {
   return h(
     'div',
-    { class: 'row link', style: '--depth: 2', 'data-nap-id': nap.id, 'data-link-id': link.id },
+    { class: 'row link', style: '--depth: 2', 'data-nap-id': nap.id, 'data-link-id': link.id, draggable: 'true' },
     h(
       'button',
       {
@@ -1445,21 +1559,3 @@ function plural(count, word) {
   return `${count} ${word}${count === 1 ? '' : 's'}`;
 }
 
-/**
- * Tiny element builder: h('span', { class: 'title' }, 'Hello').
- * Attributes that are false/null are skipped. Children that are strings
- * become text nodes, never HTML, so a page title like "<img onerror=…>"
- * is shown as plain text and can't inject anything into Tabbies.
- */
-function h(tag, attributes = {}, ...children) {
-  const element = document.createElement(tag);
-  for (const [name, value] of Object.entries(attributes)) {
-    if (value === false || value == null) continue;
-    element.setAttribute(name, value === true ? '' : String(value));
-  }
-  for (const child of children) {
-    if (child === false || child == null || child === '') continue;
-    element.append(child);
-  }
-  return element;
-}
