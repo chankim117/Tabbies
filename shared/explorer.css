@@ -1,0 +1,586 @@
+/* shared/explorer.css
+ *
+ * Styles for the explorer component (shared/explorer.js). Everything is scoped
+ * under .explorer so a view's own styles can't collide with it. Colors come
+ * from shared/theme.css, which views load first.
+ */
+
+.explorer {
+  /* Lets the @container rule below adapt rows to the explorer's own width,
+     e.g. a narrow popup or side panel. */
+  container-type: inline-size;
+  color: var(--text);
+  font: 13px/1.4 var(--font);
+}
+
+.explorer [hidden] {
+  display: none !important;
+}
+
+.explorer .icon {
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+
+.explorer button {
+  font: inherit;
+  color: inherit;
+}
+
+.explorer button:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+/* ---- Toolbar: search + summary --------------------------------------------- */
+
+.explorer .toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 0;
+  background: var(--bg);
+}
+
+.explorer .search {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-raised);
+  color: var(--text-muted);
+  cursor: text;
+}
+
+.explorer .search:focus-within {
+  border-color: var(--focus);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.explorer .search-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font: 14px var(--font);
+}
+
+.explorer .summary {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ---- Tree --------------------------------------------------------------------
+ * Every line is a .row. Its --depth (0 window, 1 group or tab, 2 tab in group)
+ * sets the indent. Each step is 24px = chevron (16) + gap (8), so a tab's
+ * favicon lines up under its parent's icon or label.
+ */
+
+.explorer .tree {
+  padding-bottom: 16px;
+  /* Dragging rows shouldn't select their text. */
+  user-select: none;
+}
+
+.explorer .branch {
+  position: relative;
+}
+
+.explorer .row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  border-radius: 6px;
+}
+
+.explorer .row:hover {
+  background: var(--hover);
+}
+
+.explorer .toggle,
+.explorer .tab-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 8px 0 calc(8px + var(--depth, 0) * 24px);
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* Indent guide: a thin line below each window or group, under its chevron. */
+.explorer .children {
+  position: relative;
+}
+
+.explorer .children::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 4px;
+  left: calc(16px + var(--depth, 0) * 24px);
+  border-left: 1px solid var(--guide);
+  pointer-events: none;
+}
+
+.explorer .chevron {
+  color: var(--text-muted);
+  transition: transform 120ms ease;
+}
+
+.explorer .toggle[aria-expanded="true"] .chevron {
+  transform: rotate(90deg);
+}
+
+.explorer .count {
+  flex: none;
+  margin-left: auto;
+  padding-left: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Windows ------------------------------------------------------------------ */
+
+.explorer .window + .window {
+  margin-top: 8px;
+}
+
+.explorer .window > .row .toggle {
+  height: 34px;
+  font-weight: 600;
+}
+
+.explorer .node-icon {
+  color: var(--text-muted);
+}
+
+.explorer .window.is-current > .row .node-icon {
+  color: var(--accent);
+}
+
+.explorer .badge {
+  flex: none;
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.explorer .badge-current {
+  border-color: transparent;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* The window's selected tab, as a hint to tell windows apart. */
+.explorer .hint {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- Groups ------------------------------------------------------------------- */
+
+.explorer .group {
+  --group: var(--group-grey);
+}
+.explorer .group[data-color="blue"] { --group: var(--group-blue); }
+.explorer .group[data-color="red"] { --group: var(--group-red); }
+.explorer .group[data-color="yellow"] { --group: var(--group-yellow); }
+.explorer .group[data-color="green"] { --group: var(--group-green); }
+.explorer .group[data-color="pink"] { --group: var(--group-pink); }
+.explorer .group[data-color="purple"] { --group: var(--group-purple); }
+.explorer .group[data-color="cyan"] { --group: var(--group-cyan); }
+.explorer .group[data-color="orange"] { --group: var(--group-orange); }
+
+.explorer .group-label {
+  min-width: 0;
+  overflow: hidden;
+  padding: 1px 8px;
+  border-radius: 6px;
+  background: var(--group);
+  color: var(--group-ink);
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Yellow and orange are light enough to need dark text, even in light mode. */
+.explorer .group:is([data-color="yellow"], [data-color="orange"]) .group-label {
+  color: var(--group-ink-light-bg);
+}
+
+.explorer .group-label.is-unnamed {
+  font-style: italic;
+  font-weight: 500;
+}
+
+.explorer .group > .children::before {
+  border-left: 2px solid var(--group);
+  opacity: 0.7;
+}
+
+/* ---- Tabs --------------------------------------------------------------------- */
+
+.explorer .tab.is-active {
+  background: var(--selected);
+}
+
+.explorer .tab.is-active:hover {
+  background: var(--hover);
+}
+
+.explorer .favicon {
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+
+.explorer .favicon-fallback {
+  display: grid;
+  place-items: center;
+  color: var(--text-muted);
+}
+
+.explorer .title {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.explorer .status {
+  flex: none;
+  display: inline-flex;
+  gap: 4px;
+  color: var(--text-muted);
+}
+
+.explorer .status .icon {
+  width: 14px;
+  height: 14px;
+}
+
+.explorer .domain {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 40%;
+  margin-left: auto;
+  padding-left: 12px;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Selected with Ctrl/Shift+click. Comes after .is-active so selection wins. */
+.explorer .tab.is-selected,
+.explorer .tab.is-selected:hover {
+  background: var(--selection);
+  box-shadow: inset 0 0 0 1px var(--selection-edge);
+}
+
+/* Asleep (discarded) tabs are dimmed, like Chrome does in the tab strip. */
+.explorer .tab.is-asleep .favicon {
+  opacity: 0.5;
+}
+
+.explorer .tab.is-asleep .title {
+  color: var(--text-muted);
+}
+
+/* Mute and close buttons appear when the row is hovered or focused. */
+.explorer .action {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  margin-right: 2px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0;
+}
+
+.explorer .row:hover .action,
+.explorer .row:focus-within .action {
+  opacity: 1;
+}
+
+.explorer .action:hover {
+  background: var(--hover-strong);
+  color: var(--text);
+}
+
+.explorer .action.close:hover {
+  color: var(--danger);
+}
+
+/* Touch screens have no hover, so keep the buttons visible there. */
+@media (hover: none) {
+  .explorer .action {
+    opacity: 1;
+  }
+}
+
+/* ---- Drag and drop (shared/drag-drop.js) --------------------------------------------- */
+
+/* The row or branch being dragged. */
+.explorer .is-dragging {
+  opacity: 0.4;
+}
+
+/* "It will land here" line, indented to the depth the item will end up at. */
+.explorer .row.drop-before::before,
+.explorer .row.drop-after::after,
+.explorer .branch.drop-after::after {
+  content: "";
+  position: absolute;
+  z-index: 1;
+  right: 4px;
+  left: calc(8px + var(--depth, 0) * 24px);
+  height: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  pointer-events: none;
+}
+
+.explorer .row.drop-before::before {
+  top: -1px;
+}
+
+.explorer .row.drop-after::after,
+.explorer .branch.drop-after::after {
+  bottom: -1px;
+}
+
+/* A group branch has no --depth of its own; it sits at depth 1. */
+.explorer .branch.group.drop-after::after {
+  left: calc(8px + 24px);
+}
+
+/* "It will go into this": a window, a group, or the new-window zone. */
+.explorer .row.drop-inside {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+}
+
+.explorer .new-window-zone {
+  position: sticky;
+  bottom: 8px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 44px;
+  margin: 8px 0;
+  border: 1.5px dashed var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.explorer .new-window-zone.drop-inside {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* "3 tabs" badge under the pointer while dragging several tabs. It is drawn
+   off-screen just long enough for the browser to take its picture. */
+.explorer .drag-badge {
+  position: fixed;
+  top: -100px;
+  left: 0;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--bg);
+  font: 600 12px var(--font);
+}
+
+/* ---- Sort menu --------------------------------------------------------------------
+ * A popover: the browser shows it above everything else. The default popover
+ * style centers it on screen; explorer.js places it under its button instead.
+ * (No `display` here: the browser hides a closed popover with display: none.)
+ */
+
+.explorer .menu {
+  position: fixed;
+  inset: auto;
+  width: 260px;
+  max-width: calc(100vw - 16px);
+  margin: 0;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: var(--shadow);
+  font: 13px/1.35 var(--font);
+}
+
+.explorer .menu-title {
+  margin: 4px 10px 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.explorer .menu-item {
+  display: grid;
+  gap: 1px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+.explorer .menu-item:hover,
+.explorer .menu-item:focus-visible {
+  outline: none;
+  background: var(--hover);
+}
+
+.explorer .menu-label {
+  font-weight: 500;
+}
+
+.explorer .menu-hint {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.explorer .menu-note {
+  margin: 6px 4px 2px;
+  padding: 8px 6px 2px;
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+/* ---- Toast: "Sorted Window 1 by site · Undo" ---------------------------------------- */
+
+.explorer .toast {
+  position: fixed;
+  z-index: 5;
+  bottom: 16px;
+  left: 50%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: max-content;
+  max-width: calc(100% - 32px);
+  padding: 8px 8px 8px 14px;
+  border-radius: 10px;
+  background: var(--toast-bg);
+  color: var(--toast-text);
+  box-shadow: var(--shadow);
+  font-size: 13px;
+  transform: translateX(-50%);
+}
+
+.explorer .toast button {
+  flex: none;
+  padding: 5px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--toast-action);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.explorer .toast button:hover {
+  background: rgb(127 127 127 / 0.2);
+}
+
+/* ---- Messages ----------------------------------------------------------------- */
+
+.explorer .message {
+  margin: 40px 0;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+/* Read by screen readers, invisible on screen. */
+.explorer .visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ---- Narrow views: popup and side panel ------------------------------------------ */
+
+@container (max-width: 420px) {
+  .explorer .domain,
+  .explorer .hint {
+    display: none;
+  }
+
+  .explorer .toolbar {
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 8px 0;
+  }
+
+  .explorer .search {
+    height: 32px;
+  }
+
+  .explorer .summary {
+    flex-basis: 100%;
+    padding-left: 4px;
+    font-size: 11px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .explorer .chevron {
+    transition: none;
+  }
+}

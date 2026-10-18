@@ -1,0 +1,80 @@
+/* shared/theme.css
+ *
+ * Colors and fonts shared by every Tabbies view. Light by default; dark when
+ * the system (or Chrome) is set to dark mode, via prefers-color-scheme.
+ */
+
+:root {
+  /* Lets Chrome draw scrollbars and form controls in the matching theme. */
+  color-scheme: light dark;
+
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+
+  --bg: #ffffff;
+  --bg-raised: #f3f4f6;
+  --text: #1f2328;
+  --text-muted: #5f6368;
+  --border: #dadce0;
+  --guide: #e3e5e8;
+  --hover: #f1f3f4;
+  --hover-strong: #e3e5e8;
+  --selected: #fdf2ea; /* the active tab of each window */
+  --accent: #c2410c; /* Tabbies orange */
+  --accent-soft: #fde6d6;
+  --focus: #c2410c;
+  --danger: #c5221f;
+  --selection: #dbe7fc; /* Ctrl/Shift-selected tabs, like selected files */
+  --selection-edge: #a8c7fa;
+  --toast-bg: #2b2c2f;
+  --toast-text: #f1f3f4;
+  --toast-action: #fdba8c;
+  --shadow: 0 8px 24px rgb(0 0 0 / 0.16);
+
+  /* Chrome's tab group colors, and the text color used on top of them. */
+  --group-grey: #5f6368;
+  --group-blue: #1a73e8;
+  --group-red: #d93025;
+  --group-yellow: #f9ab00;
+  --group-green: #188038;
+  --group-pink: #d01884;
+  --group-purple: #9334e6;
+  --group-cyan: #007b83;
+  --group-orange: #fa903e;
+  --group-ink: #ffffff;
+  --group-ink-light-bg: #202124;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1f1f1f;
+    --bg-raised: #2b2c2e;
+    --text: #e8eaed;
+    --text-muted: #9aa0a6;
+    --border: #3c4043;
+    --guide: #3a3c3f;
+    --hover: #2a2b2d;
+    --hover-strong: #3a3c3f;
+    --selected: #352a21;
+    --accent: #fb923c;
+    --accent-soft: #43301f;
+    --focus: #fb923c;
+    --danger: #f28b82;
+    --selection: #233a5c;
+    --selection-edge: #3d6399;
+    --toast-bg: #e8eaed;
+    --toast-text: #202124;
+    --toast-action: #b5440b;
+    --shadow: 0 8px 24px rgb(0 0 0 / 0.5);
+
+    --group-grey: #bdc1c6;
+    --group-blue: #8ab4f8;
+    --group-red: #f28b82;
+    --group-yellow: #fdd663;
+    --group-green: #81c995;
+    --group-pink: #ff8bcb;
+    --group-purple: #d7aefb;
+    --group-cyan: #78d9ec;
+    --group-orange: #fcad70;
+    --group-ink: #202124;
+  }
+}

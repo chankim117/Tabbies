@@ -1,0 +1,144 @@
+/* shared/view.css
+ *
+ * Page layout around the explorer for the three views. Each view's <body> has
+ * a class (full-tab, popup, side-panel) that picks its layout below. The
+ * explorer adapts its rows to the space it gets (see @container in explorer.css).
+ */
+
+html,
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+}
+
+/* ---- Header: logo, name, buttons to switch views --------------------------------- */
+
+.view-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.view-header h1 {
+  margin: 0;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.view-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.view-actions button {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.view-actions button:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.view-actions button:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.view-actions .icon {
+  width: 18px;
+  height: 18px;
+}
+
+.shortcut {
+  margin: 0 6px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+kbd {
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--bg-raised);
+  color: var(--text);
+  font: 600 11px var(--font);
+}
+
+/* ---- Full tab: a centered column, the page scrolls ---------------------------------- */
+
+body.full-tab .page {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 0 24px 48px;
+}
+
+body.full-tab .view-header {
+  padding: 24px 0 4px;
+}
+
+body.full-tab .view-header h1 {
+  font-size: 20px;
+}
+
+@media (max-width: 600px) {
+  body.full-tab .page {
+    padding: 0 16px 32px;
+  }
+
+  body.full-tab .shortcut {
+    display: none;
+  }
+}
+
+/* ---- Side panel: as wide as the panel, the page scrolls ------------------------------ */
+
+body.side-panel .view-header {
+  padding: 12px 12px 0;
+}
+
+body.side-panel .view-header h1 {
+  font-size: 16px;
+}
+
+body.side-panel #explorer {
+  padding: 0 6px 16px;
+}
+
+/* ---- Popup: fixed size, header stays put, only the tree scrolls ----------------------- */
+
+body.popup {
+  display: flex;
+  flex-direction: column;
+  width: 400px;
+  height: 560px;
+  overflow: hidden;
+}
+
+body.popup .view-header {
+  padding: 10px 10px 0 12px;
+}
+
+body.popup .view-header h1 {
+  font-size: 15px;
+}
+
+body.popup #explorer {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 6px;
+}

@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!-- "Tab Nap": the icon for Naps (tabs closed and kept for later). A doodle cat asleep on a stack of tabs. -->
+  <rect x="16" y="110" width="96" height="13" rx="6" fill="#4c8df6" stroke="#1b1b1f" stroke-width="4.5"/>
+  <rect x="12" y="97" width="104" height="13" rx="6" fill="#34a853" stroke="#1b1b1f" stroke-width="4.5"/>
+  <rect x="8" y="84" width="112" height="13" rx="6" fill="#f08a2c" stroke="#1b1b1f" stroke-width="4.5"/>
+  <g fill="none" stroke-linecap="round">
+    <path d="M108 80 q16 4 10 22" stroke="#1b1b1f" stroke-width="13"/>
+    <path d="M108 80 q16 4 10 22" stroke="#fff" stroke-width="5"/>
+  </g>
+  <path d="M18 86 C16 64 30 50 44 48 L48 30 L61 43 Q70 41 79 43 L92 30 L96 48 C110 50 116 66 112 86 Z" fill="#fff" stroke="#1b1b1f" stroke-width="6" stroke-linejoin="round"/>
+  <path d="M42 66 q6 6 12 0 M74 66 q6 6 12 0" fill="none" stroke="#1b1b1f" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="36" cy="74" r="4.5" fill="#f7a1b0" opacity="0.85"/>
+  <circle cx="92" cy="74" r="4.5" fill="#f7a1b0" opacity="0.85"/>
+  <path d="M60 73 q2 3 4 0 q2 3 4 0" fill="none" stroke="#1b1b1f" stroke-width="3" stroke-linecap="round"/>
+  <path d="M98 10 h10 l-10 12 h10 M114 2 h7 l-7 8 h7" fill="none" stroke="#1b1b1f" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

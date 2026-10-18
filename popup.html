@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Tabbies</title>
+    <link rel="stylesheet" href="shared/theme.css" />
+    <link rel="stylesheet" href="shared/explorer.css" />
+    <link rel="stylesheet" href="shared/view.css" />
+    <script type="module" src="popup.js"></script>
+  </head>
+  <body class="popup">
+    <header class="view-header">
+      <img src="icons/icon32.png" width="20" height="20" alt="" />
+      <h1>Tabbies</h1>
+      <div class="view-actions">
+        <button type="button" data-open="side-panel" data-icon="sidePanel"
+          title="Open in the side panel" aria-label="Open in the side panel"></button>
+        <button type="button" data-open="full-tab" data-icon="openTab"
+          title="Open in a tab (Alt+T)" aria-label="Open in a tab"></button>
+      </div>
+    </header>
+    <main id="explorer"></main>
+  </body>
+</html>

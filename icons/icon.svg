@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!-- Source for icon16/32/48/128.png. "Folder Peek": a doodle cat peeking out of a file folder full of tabs. -->
+  <!-- Folder back -->
+  <path d="M8 46 a8 8 0 0 1 8-8 h28 l10 10 h58 a8 8 0 0 1 8 8 v54 a10 10 0 0 1-10 10 H18 a10 10 0 0 1-10-10z" fill="#d9701a" stroke="#1b1b1f" stroke-width="5" stroke-linejoin="round"/>
+  <!-- Tabs sticking out behind the cat -->
+  <rect x="94" y="30" width="16" height="22" rx="4" fill="#4c8df6" stroke="#1b1b1f" stroke-width="4" transform="rotate(12 102 41)"/>
+  <rect x="16" y="32" width="16" height="22" rx="4" fill="#34a853" stroke="#1b1b1f" stroke-width="4" transform="rotate(-12 24 43)"/>
+  <!-- Cat head -->
+  <g transform="translate(20 10) scale(0.7)">
+    <path d="M16 100 C14 70 22 48 34 40 L38 14 L57 30 Q64 28 71 30 L90 14 L94 40 C106 48 114 70 112 100 Z" fill="#fff" stroke="#1b1b1f" stroke-width="8" stroke-linejoin="round"/>
+    <circle cx="49" cy="64" r="4.5" fill="#1b1b1f"/>
+    <circle cx="79" cy="64" r="4.5" fill="#1b1b1f"/>
+    <circle cx="40" cy="75" r="5" fill="#f7a1b0" opacity="0.85"/>
+    <circle cx="88" cy="75" r="5" fill="#f7a1b0" opacity="0.85"/>
+    <path d="M57 72 q3.5 5 7 0 q3.5 5 7 0" fill="none" stroke="#1b1b1f" stroke-width="3.5" stroke-linecap="round"/>
+  </g>
+  <!-- Folder front and paws -->
+  <path d="M8 70 h112 v40 a10 10 0 0 1-10 10 H18 a10 10 0 0 1-10-10z" fill="#f08a2c" stroke="#1b1b1f" stroke-width="5" stroke-linejoin="round"/>
+  <ellipse cx="48" cy="71" rx="9" ry="6" fill="#fff" stroke="#1b1b1f" stroke-width="4"/>
+  <ellipse cx="80" cy="71" rx="9" ry="6" fill="#fff" stroke="#1b1b1f" stroke-width="4"/>
+</svg>
