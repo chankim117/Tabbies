@@ -11,6 +11,10 @@
 //   subscribe(onChange)               → unsubscribe()      calls onChange (debounced) on any change
 //   activateTab(tab)                  → Promise            switch to a tab and focus its window
 //   closeTab(tab)                     → Promise
+//   duplicateTabs(tabs)               → Promise<ids>       copies, for undoDuplicate(ids)
+//   openNewTab({ windowId, afterTabId }), openNewWindow()
+//   setTabsPinned(tabs, pinned), reloadTabs(tabs), sleepTabs(tabs), sleepOtherTabs(windowId)
+//   closeDuplicates(windowId?)        → Promise<undo>      for undoClose()
 //   setTabMuted(tab, muted)           → Promise
 //   moveTabs(tabs, target)            → Promise            see MoveTarget below
 //   groupTabs(tabs)                   → Promise<undo>      puts tabs in a new tab group
@@ -44,6 +48,7 @@
 // @property {boolean} discarded  "asleep": Chrome unloaded it to save memory
 // @property {boolean} incognito
 // @property {boolean} highlighted  multi-selected in Chrome's tab strip (Ctrl+click there)
+// @property {number} copies      how many open tabs show this same page (1 = no duplicates)
 //
 // @typedef {object} GroupNode
 // @property {'group'} kind
@@ -78,7 +83,7 @@
 //   tab group, or a run of ungrouped tabs (groupId -1).
 
 import { SORT_ORDERS } from './sorting.js';
-import { readNaps } from './naps-api.js';
+import { closeTabs, readNaps } from './naps-api.js';
 import { readSettings } from './settings-api.js';
 
 // Naps (tabs closed and saved for later) and settings live in their own files; the
@@ -134,8 +139,14 @@ export async function getSnapshot() {
   const groupsById = new Map(groups.map((group) => [group.id, group]));
   const shown = windows.filter((win) => incognitoAllowed || !win.incognito);
   const names = await windowNamesFor(shown);
+  // How many tabs show each page, so duplicates can be marked.
+  const copies = new Map();
+  for (const tab of shown.flatMap((win) => win.tabs ?? [])) {
+    const key = duplicateKey(tab);
+    if (key) copies.set(key, (copies.get(key) ?? 0) + 1);
+  }
   return {
-    windows: shown.map((win) => ({ ...toWindowNode(win, groupsById, currentWindowId), name: names.get(win.id) ?? '' })),
+    windows: shown.map((win) => ({ ...toWindowNode(win, groupsById, currentWindowId, copies), name: names.get(win.id) ?? '' })),
     naps,
     settings,
   };
@@ -327,6 +338,120 @@ export async function activateTab(tab) {
 /** Closes `tab`. chrome.tabs.remove accepts one tab id or an array of ids. */
 export function closeTab(tab) {
   return chrome.tabs.remove(tab.id);
+}
+
+/**
+ * Duplicates tabs: each copy opens right after its original, with the same
+ * page and back/forward history. The tab you're looking at stays the same.
+ * @returns {Promise<number[]>} ids of the copies, for undoDuplicate()
+ */
+export async function duplicateTabs(tabs) {
+  const copies = [];
+  for (const windowId of new Set(tabs.map((tab) => tab.windowId))) {
+    await keepingActiveTab(windowId, async () => {
+      for (const tab of tabs.filter((t) => t.windowId === windowId)) {
+        // chrome.tabs.duplicate copies a tab (and selects the copy, which
+        // keepingActiveTab undoes).
+        const copy = await chrome.tabs.duplicate(tab.id);
+        if (copy) copies.push(copy.id);
+      }
+    });
+  }
+  return copies;
+}
+
+/** Pins or unpins tabs. Pinned tabs move to the start of their window (and leave their group). */
+export async function setTabsPinned(tabs, pinned) {
+  // chrome.tabs.update with `pinned` pins or unpins one tab.
+  for (const tab of tabs) await chrome.tabs.update(tab.id, { pinned });
+}
+
+/** Reloads tabs. chrome.tabs.reload loads the page again (like pressing F5). */
+export async function reloadTabs(tabs) {
+  for (const tab of tabs) await chrome.tabs.reload(tab.id);
+}
+
+/**
+ * Puts tabs to sleep: chrome.tabs.discard unloads a tab to free memory but
+ * keeps it in the tab strip; it loads again when you switch to it. The tab
+ * you're looking at in each window can't sleep, and tabs playing sound are
+ * left awake. (Chrome gives a sleeping tab a new id.)
+ * @returns {Promise<{count: number, skipped: number}>}
+ */
+export async function sleepTabs(tabs) {
+  let count = 0;
+  let skipped = 0;
+  for (const tab of tabs) {
+    const now = await chrome.tabs.get(tab.id).catch(() => null);
+    if (!now || now.discarded) continue;
+    if (now.active || now.audible) {
+      skipped++;
+      continue;
+    }
+    if (await chrome.tabs.discard(now.id).catch(() => null)) count++;
+    else skipped++;
+  }
+  return { count, skipped };
+}
+
+/** Puts every tab of a window to sleep except the one you're looking at (and ones playing sound). */
+export async function sleepOtherTabs(windowId) {
+  const tabs = await chrome.tabs.query({ windowId, active: false, discarded: false });
+  return sleepTabs(tabs.filter((tab) => !tab.audible));
+}
+
+/**
+ * Closes duplicate tabs (the same page open more than once): in one window,
+ * or everywhere when no window is given. For each page one tab stays open:
+ * a pinned one, else the one you're looking at, else the first one.
+ * @returns {Promise<object>} undo info for undoClose()
+ */
+export async function closeDuplicates(windowId) {
+  const tabs = await chrome.tabs.query(windowId === undefined ? { windowType: 'normal' } : { windowId });
+  const byPage = new Map();
+  for (const tab of tabs) {
+    const key = duplicateKey(tab);
+    if (!key) continue;
+    byPage.set(key, [...(byPage.get(key) ?? []), tab]);
+  }
+  const extra = [];
+  for (const same of byPage.values()) {
+    if (same.length < 2) continue;
+    const keep = same.find((tab) => tab.pinned) ?? same.find((tab) => tab.active) ?? same[0];
+    extra.push(...same.filter((tab) => tab !== keep).map((tab) => tab.id));
+  }
+  return extra.length > 0 ? closeTabs(extra) : { count: 0, tabs: [] };
+}
+
+/** Closes the copies made by duplicateTabs(). */
+export async function undoDuplicate(copyIds) {
+  const open = (await Promise.all(copyIds.map((id) => chrome.tabs.get(id).catch(() => null)))).filter(Boolean);
+  if (open.length > 0) await chrome.tabs.remove(open.map((tab) => tab.id));
+}
+
+/**
+ * Opens a new tab (Chrome's New Tab page) and switches to it: at the end of
+ * a window, or right after a tab (joining that tab's group, if any).
+ */
+export async function openNewTab({ windowId, afterTabId } = {}) {
+  let index;
+  let groupId = NO_GROUP;
+  if (afterTabId !== undefined) {
+    const after = await chrome.tabs.get(afterTabId);
+    windowId = after.windowId;
+    index = after.index + 1;
+    groupId = after.groupId;
+  }
+  // chrome.tabs.create with no url opens the New Tab page.
+  const tab = await chrome.tabs.create({ windowId, index, active: true });
+  if (groupId !== NO_GROUP) await chrome.tabs.group({ groupId, tabIds: [tab.id] });
+  await chrome.windows.update(tab.windowId, { focused: true });
+  return tab;
+}
+
+/** Opens a new, empty browser window (with a New Tab page) and switches to it. */
+export async function openNewWindow() {
+  await chrome.windows.create({ focused: true });
 }
 
 /**
@@ -880,12 +1005,12 @@ function isIncognitoAllowed() {
   return incognitoAllowedPromise;
 }
 
-function toWindowNode(win, groupsById, currentWindowId) {
+function toWindowNode(win, groupsById, currentWindowId, copies) {
   const children = [];
   let openGroup = null; // the group node that consecutive grouped tabs go into
 
   for (const tab of win.tabs ?? []) {
-    const tabNode = toTabNode(tab);
+    const tabNode = toTabNode(tab, copies);
 
     if (tab.groupId === NO_GROUP) {
       openGroup = null;
@@ -920,7 +1045,7 @@ function toWindowNode(win, groupsById, currentWindowId) {
   };
 }
 
-function toTabNode(tab) {
+function toTabNode(tab, copies) {
   return {
     kind: 'tab',
     id: tab.id,
@@ -938,7 +1063,19 @@ function toTabNode(tab) {
     discarded: tab.discarded,
     incognito: tab.incognito,
     highlighted: tab.highlighted,
+    copies: copies?.get(duplicateKey(tab)) ?? 1,
   };
+}
+
+/**
+ * Which page a tab shows, for spotting duplicates: its address without the
+ * #part (which only scrolls within a page). New Tab pages and Tabbies itself
+ * don't count.
+ */
+function duplicateKey(tab) {
+  const url = tab.url || tab.pendingUrl || '';
+  if (!url || url.startsWith(TABBIES_URL) || /^chrome:\/\/(newtab|new-tab-page)\/?$/.test(url) || url === 'about:blank') return '';
+  return url.split('#')[0];
 }
 
 /**

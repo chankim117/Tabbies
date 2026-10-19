@@ -38,7 +38,7 @@
 .explorer .toolbar {
   position: sticky;
   top: 0;
-  z-index: 1;
+  z-index: 3;
   display: flex;
   flex-wrap: wrap; /* the selection bar takes its own line */
   align-items: center;
@@ -186,6 +186,33 @@
 .explorer .naps > .row {
   border-radius: 8px;
   background-color: var(--band);
+}
+
+/* Window rows (and the Naps heading) stay at the top while you scroll
+   through their tabs, just under the toolbar (its height is measured in
+   explorer.js), so you always see which window you're in, and its buttons. */
+.explorer .window > .row,
+.explorer .naps > .row {
+  position: sticky;
+  top: var(--tabbies-toolbar-height, 60px);
+  z-index: 2;
+}
+
+/* A stuck header must not be see-through. In a selected window it draws the
+   selection itself, top edge included. */
+.explorer .branch.is-selected-branch:is(.window, .naps) > .row.is-selected {
+  border-radius: var(--round-top) var(--round-top) 0 0;
+  background-color: var(--selection);
+  box-shadow:
+    inset 1px 0 var(--selection-edge),
+    inset -1px 0 var(--selection-edge),
+    inset 0 var(--edge-top) var(--selection-edge);
+}
+
+/* Keyboard moves (scrollIntoView) keep the focused row clear of the
+   toolbar and a stuck window header. */
+:root {
+  scroll-padding-top: calc(var(--tabbies-toolbar-height, 60px) + 44px);
 }
 
 .explorer .window > .row:hover,
@@ -799,10 +826,11 @@
 }
 
 .explorer .menu-item {
-  display: grid;
-  gap: 1px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
   width: 100%;
-  padding: 7px 10px;
+  padding: 6px 10px;
   border: 0;
   border-radius: 6px;
   background: none;
@@ -867,9 +895,21 @@
     center / 12px no-repeat;
 }
 
-.explorer .menu-hint {
+/* The key for it, at the right edge: "Del", "Ctrl+G". */
+.explorer .menu-shortcut {
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
   color: var(--text-muted);
-  font-size: 12px;
+  font: 12px/1 var(--font);
+}
+
+.explorer .menu-separator {
+  height: 1px;
+  margin: 4px 8px;
+  background: var(--border);
 }
 
 .explorer .menu-note {
@@ -973,4 +1013,36 @@
   .explorer .chevron {
     transition: none;
   }
+}
+
+/* The one-time tip under the toolbar: "Click to select · double-click to open …" */
+.explorer .tip {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 10px;
+  padding: 8px 8px 8px 12px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.explorer .tip[hidden] {
+  display: none;
+}
+
+.explorer .tip > span {
+  flex: 1;
+}
+
+.explorer .tip-close {
+  flex: none;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
 }

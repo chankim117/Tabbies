@@ -43,6 +43,8 @@ Click ⚙ in any Tabbies view, or right-click the Tabbies icon → **Options**. 
 - Tabs show the site icon, title and site, plus small icons for **playing sound**, **muted**, **pinned** and **asleep** (unloaded by Chrome to save memory).
 - **Search** by title or URL as you type. Windows and groups with no matches are hidden.
 - **Live updates:** the tree follows every change you make anywhere in Chrome.
+- A window's row stays at the top while you scroll through its tabs, so you always see which window you're in.
+- The first time you open Tabbies, a small tip explains the clicks (click to select, double-click to open, right-click for more). **Got it** hides it for good.
 - **Light and dark mode** follow your system setting.
 
 ### Tab actions
@@ -53,9 +55,14 @@ Each row keeps just its main buttons, always faintly visible and brighter under 
 
 **Right-click any row** for everything else, like on a desktop:
 
-- **Tabs:** Switch to this tab, Nap, Put in a new group, Ungroup and the group's color (for grouped tabs), Move to a new window, Mute, Close. Right-clicking a selected tab acts on the whole selection.
-- **Groups:** Rename, color, Ungroup, Close.
-- **Windows:** Nap, Sort tabs…, Rename, Close.
+- **Tabs:** Switch to this tab, Nap, Put in a new group, Ungroup and the group's color (for grouped tabs), New tab to the right, Duplicate, Move to a new window, Pin/Unpin, Mute, Reload, Sleep, Close its duplicates (for a duplicate), Close. Right-clicking a selected tab acts on the whole selection.
+- **Groups:** Rename, color, New tab in group, Ungroup, Close.
+- **Windows:** Nap, Sort tabs…, New tab, New window, Sleep other tabs, Close duplicate tabs (when there are some), Rename, Close.
+- **Empty space:** New window, Nap every window, Close duplicate tabs everywhere.
+
+**Sleep** unloads tabs to free memory: they stay in the tab strip (dimmed here, with a moon) and load again when you open them. The tab you're looking at and tabs playing sound stay awake.
+
+**Duplicates:** a tab whose page is open more than once (in any window) shows a small two-pages icon; its tooltip says how many. **Close duplicate tabs** keeps one of each page (a pinned one, or the one you're looking at, if any) and closes the rest, with Undo.
 - **Naps and napped links:** the same as their ⋯ menu; Wake or Delete for links.
 
 Right-clicking something that isn't selected selects it first.
@@ -105,7 +112,7 @@ Groups stay together: tabs are sorted inside each group, and the ungrouped tabs 
 - **Wake** a whole nap with its ☀ button: here, or as a group if it came from one. The ⋯ menu also offers **Wake as a group** and **Wake in a new window**. Double-click a single link to open just that tab.
 - Woken links leave the nap, and an empty nap disappears. To keep them instead, turn on **Keep links after waking** in the Naps ⋯ menu.
 - **Drag naps around like files:** drag a nap, or one or more links, onto a window, between tabs, onto a tab group or onto **new window**, and they wake right there. A nap that came from a tab group wakes as that group. Inside Naps, drag links to reorder them or move them to another nap (onto the Naps heading makes a new nap), and drag naps to reorder them.
-- **Select links** with Ctrl/Shift+click like tabs; the bar that appears offers **Wake** and **Delete**.
+- **Select links** with Ctrl/Shift+click like tabs (or click a nap to select all of it); the bar that appears offers **Wake**, **New window** (wake them in a new window) and **Delete**. The same are in the right-click menu.
 - Every nap, wake and delete shows an **Undo** button. To clear everything, the Naps ⋯ menu has **Delete all naps…**, which asks first.
 - Search finds napped tabs too.
 
@@ -152,12 +159,21 @@ Without sync, removing the extension deletes your naps, so download a backup fir
 | <kbd>Esc</kbd> in search | Clear the search |
 | <kbd>↑</kbd> <kbd>↓</kbd> | Move between rows (<kbd>↓</kbd> from search enters the tree) |
 | <kbd>←</kbd> <kbd>→</kbd> | Collapse / expand a window or group |
-| <kbd>Enter</kbd> on a row or button | Switch to the tab / press the button |
+| <kbd>Enter</kbd> on a row or button | Switch to the tab, wake the link, or press the button |
 | <kbd>Shift</kbd>+<kbd>↑</kbd> <kbd>↓</kbd> | Extend the selection |
 | <kbd>Ctrl</kbd>+<kbd>A</kbd> | Select all visible tabs |
 | <kbd>Esc</kbd> | Clear the selection |
+| <kbd>Space</kbd> on a row | Select or unselect it |
+| <kbd>N</kbd> | Nap the selected tabs (or the focused one) |
+| <kbd>Ctrl</kbd>+<kbd>G</kbd> | Put the selected tabs in a new group |
+| <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>G</kbd> | Take the selected tabs out of their groups (select a group to ungroup all of it) |
+| <kbd>Del</kbd> or <kbd>Backspace</kbd> | Close the selected tabs, or delete the selected napped links |
+| <kbd>Ctrl</kbd>+<kbd>Z</kbd> | Undo the last close, nap, group, ungroup, sort… (several steps back) |
+| <kbd>Shift</kbd>+<kbd>F10</kbd> or the Menu key | Open the right-click menu of the focused row |
 
-Tabbies has just these two shortcuts. Change their keys at `chrome://extensions/shortcuts` (Settings → Keyboard shortcuts takes you there).
+On a Mac, use ⌘ for Ctrl and ⌫ for Del. The right-click menus show these keys next to their items.
+
+Alt+T, Alt+N and Alt+W work anywhere in Chrome; change them at `chrome://extensions/shortcuts` (Settings → Keyboard shortcuts takes you there). The others work inside Tabbies.
 
 ## Install (developer mode)
 
@@ -221,7 +237,7 @@ No build step: plain HTML, CSS and JavaScript (ES modules).
 
 - [x] Phase 1: full-tab view, tree, click/close/mute, search, live updates, shortcut, dark mode
 - [x] Phase 2: popup and side panel views
-- [ ] Phase 3: task-manager actions (pin, sleep, last used, reload, duplicate, Chrome Task Manager)
+- [x] Phase 3: task-manager actions: pin, sleep, reload, duplicate, find and close duplicate tabs (last used and Chrome's Task Manager: still to do; extensions can't open the Task Manager, press Shift+Esc)
 - [x] Phase 4: select multiple tabs and move them (Ctrl/Shift selection, drag a selection); merge windows by dragging one onto another
 - [x] Sorting a window by site, title or last use, with Undo
 - [x] Settings page; the toolbar icon opens the full tab by default

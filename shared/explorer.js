@@ -89,6 +89,7 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
   let renderAfterDrag = false;
   let renaming = false; // a name is being edited in place (see startRename)
   let renameEndedAt = -Infinity;
+  const undoHistory = []; // { text, run } for Ctrl+Z, newest last (see showToast)
   let nameGroupWhenShown = null; // a group just made with "Group": name it once it appears
   let destroyed = false;
 
@@ -135,6 +136,7 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
     h('button', { type: 'button', 'data-selection': 'new-window', 'data-for': 'tabs', title: 'Move them to a new window' }, icon('newWindow'), h('span', { class: 'button-text' }, 'New window')),
     h('button', { type: 'button', class: 'danger', 'data-selection': 'close', 'data-for': 'tabs', title: 'Close them (you can undo it)' }, icon('close'), h('span', { class: 'button-text' }, 'Close')),
     h('button', { type: 'button', 'data-selection': 'wake', 'data-for': 'links', title: 'Open them in this window' }, icon('wake'), h('span', { class: 'button-text' }, 'Wake')),
+    h('button', { type: 'button', 'data-selection': 'wake-window', 'data-for': 'links', title: 'Open them in a new window' }, icon('newWindow'), h('span', { class: 'button-text' }, 'New window')),
     h('button', { type: 'button', class: 'danger', 'data-selection': 'delete', 'data-for': 'links', title: 'Delete them (you can undo it)' }, icon('close'), h('span', { class: 'button-text' }, 'Delete')),
     // "Deselect", not "Clear" or "Cancel": it only un-selects; nothing is closed or undone.
     // Set apart on the right, as the "never mind" button: it only unselects.
@@ -178,14 +180,32 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
   const toast = h('div', { class: 'toast', role: 'status', hidden: true }, toastText, toastButton);
 
   container.classList.add('explorer');
+  // A one-time tip: in a browser people expect one click to switch tabs.
+  const tip = h(
+    'div',
+    { class: 'tip', role: 'note', hidden: !tipWanted() },
+    h('span', {}, h('b', {}, 'Click'), ' to select · ', h('b', {}, 'double-click'), ' to open · ', h('b', {}, 'right-click'), ' for more'),
+    h('button', { type: 'button', class: 'tip-close', 'aria-label': 'Got it, hide this tip' }, 'Got it'),
+  );
+  tip.querySelector('.tip-close').addEventListener('click', () => {
+    tip.hidden = true;
+    try {
+      localStorage.setItem(TIP_KEY, '1');
+    } catch {
+      // storage blocked: the tip just comes back next time
+    }
+  });
+
+  const toolbar = h(
+    'div',
+    { class: 'toolbar' },
+    h('label', { class: 'search' }, icon('search'), searchInput),
+    summary,
+    selectionBar,
+  );
   container.replaceChildren(
-    h(
-      'div',
-      { class: 'toolbar' },
-      h('label', { class: 'search' }, icon('search'), searchInput),
-      summary,
-      selectionBar,
-    ),
+    toolbar,
+    tip,
     tree,
     message,
     dropZones,
@@ -200,7 +220,17 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
   // One listener on the whole tree handles every row ("event delegation"),
   // instead of a listener per button.
   tree.addEventListener('click', onTreeClick);
+  // Window rows stick to the top while you scroll through their tabs, just
+  // under the (also sticky) toolbar, whose height changes (e.g. narrow views
+  // wrap it), so a ResizeObserver keeps the offset in a CSS variable.
+  const toolbarSize = new ResizeObserver(() => {
+    document.documentElement.style.setProperty('--tabbies-toolbar-height', `${toolbar.offsetHeight}px`);
+  });
+  toolbarSize.observe(toolbar);
   tree.addEventListener('contextmenu', onTreeContextMenu);
+  tree.addEventListener('keyup', (event) => {
+    if (event.key === ' ' && event.target.closest('.row')) event.preventDefault();
+  });
   tree.addEventListener('keydown', onTreeKeydown);
   // Favicons that fail to load fall back to a globe. 'error' doesn't bubble,
   // so it is caught on the way down (capture phase).
@@ -828,9 +858,29 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
    */
   function onTreeContextMenu(event) {
     const row = event.target.closest('.row');
-    if (!row || renaming) return;
+    if (renaming) return;
+    if (!row) {
+      // Empty space: things that don't belong to any row.
+      event.preventDefault();
+      openMenu({ x: event.clientX, y: event.clientY, key: null }, {
+        title: 'Tabbies',
+        items: [
+          { label: 'New window', run: () => act(api.openNewWindow()) },
+          { label: 'Nap every window', hint: 'All tabs except pinned ones, into one nap', run: () => napAndOfferUndo(api.napAllWindows()) },
+          { label: 'Close duplicate tabs everywhere', hint: 'Pages open more than once: keep one of each', run: () => closeDuplicates() },
+        ],
+      });
+      return;
+    }
     event.preventDefault(); // instead of the browser's own menu
     const point = { x: event.clientX, y: event.clientY, key: row.querySelector('.toggle, .tab-main')?.dataset.focusKey ?? null };
+    // From the keyboard (Shift+F10 or the Menu key; event.button is 2 only
+    // for the mouse) the menu opens under the row instead.
+    const box = row.getBoundingClientRect();
+    if (event.button !== 2) {
+      point.x = box.left + 32;
+      point.y = box.bottom;
+    }
 
     if (row.matches('.tab')) {
       const tabId = Number(row.dataset.tabId);
@@ -875,13 +925,16 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
       title: one ? one.title || one.url : `${tabs.length} tabs`,
       items: [
         ...(one
-          ? [{ label: 'Switch to this tab', hint: 'Or double-click it', run: () => { setSelection([]); switchTo(one); } }]
+          ? [
+              { label: 'Switch to this tab', hint: 'Or double-click it', shortcut: 'Enter', run: () => { setSelection([]); switchTo(one); } },
+              SEPARATOR,
+            ]
           : []),
-        { label: 'Nap', hint: 'Close and keep for later', run: () => runTabsAction('nap', tabs) },
-        { label: one ? 'Put in a new group' : 'Group', hint: 'Then type a name for it', run: () => runTabsAction('group', tabs) },
+        { label: 'Nap', hint: 'Close and keep for later', shortcut: 'N', run: () => runTabsAction('nap', tabs) },
+        { label: one ? 'Put in a new group' : 'Group', hint: 'Then type a name for it', shortcut: KEYS.group, run: () => runTabsAction('group', tabs) },
         ...(groupIds.length > 0
           ? [
-              { label: 'Ungroup', hint: 'The tabs stay open', run: () => runTabsAction('ungroup', tabs) },
+              { label: 'Ungroup', hint: 'The tabs stay open', shortcut: KEYS.ungroup, run: () => runTabsAction('ungroup', tabs) },
               {
                 label: 'Group color',
                 swatches: GROUP_COLORS.map((color) => ({
@@ -893,11 +946,91 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
               },
             ]
           : []),
+        SEPARATOR,
+        ...(one ? [{ label: 'New tab to the right', hint: 'In the same group, if it has one', run: () => newTab({ afterTabId: one.id }) }] : []),
+        { label: one ? 'Duplicate' : `Duplicate ${tabs.length} tabs`, hint: 'Each copy opens next to its original', run: () => duplicate(tabs) },
         { label: 'Move to a new window', run: () => runTabsAction('new-window', tabs) },
+        SEPARATOR,
+        {
+          label: tabs.every((tab) => tab.pinned) ? 'Unpin' : 'Pin',
+          hint: 'Pinned tabs stay small at the start of the window',
+          run: () => act(api.setTabsPinned(tabs, !tabs.every((tab) => tab.pinned))),
+        },
         ...(one ? [{ label: one.muted ? 'Unmute' : 'Mute', run: () => act(api.setTabMuted(one, !one.muted)) }] : []),
-        { label: one ? 'Close tab' : `Close ${tabs.length} tabs`, hint: 'You can undo it', run: () => runTabsAction('close', tabs) },
+        { label: 'Reload', run: () => act(api.reloadTabs(tabs), `Reloaded ${plural(tabs.length, 'tab')}`) },
+        ...(tabs.some((tab) => !tab.discarded && !tab.active)
+          ? [{ label: 'Sleep', hint: 'Unload to free memory; it loads again when you open it', run: () => sleep(api.sleepTabs(tabs)) }]
+          : []),
+        ...(one && one.copies > 1
+          ? [{ label: 'Close its duplicates', hint: `This page is open in ${one.copies} tabs; keep just one`, run: () => closeDuplicatesOf(one) }]
+          : []),
+        SEPARATOR,
+        { label: one ? 'Close tab' : `Close ${tabs.length} tabs`, hint: 'You can undo it', shortcut: KEYS.del, run: () => runTabsAction('close', tabs) },
       ],
     });
+  }
+
+  /** Waits for tabs to fall asleep and says how it went. */
+  function sleep(sleeping) {
+    setSelection([]); // sleeping tabs get new ids, so the old selection would point at nothing
+    sleeping.then(
+      ({ count, skipped }) => {
+        const note = skipped > 0 ? ` · ${skipped} kept awake (open or playing sound)` : '';
+        showToast(count > 0 ? `Put ${plural(count, 'tab')} to sleep${note}` : `Nothing to put to sleep${note}`);
+      },
+      (error) => showError('put those to sleep', error),
+    );
+  }
+
+  /** Does this window have the same page open more than once? */
+  function hasDuplicates(win) {
+    const seen = new Set();
+    for (const tab of tabsIn(win)) {
+      if (tab.copies < 2) continue;
+      const key = tab.url.split('#')[0];
+      if (seen.has(key)) return true;
+      seen.add(key);
+    }
+    return false;
+  }
+
+  /** Closes duplicate tabs in one window (or everywhere), with Undo. */
+  function closeDuplicates(windowId) {
+    api.closeDuplicates(windowId).then(
+      (undo) => {
+        if (undo.count === 0) showToast('No duplicate tabs');
+        else showToast(`Closed ${plural(undo.count, 'duplicate tab')}`, 'Undo', () => act(api.undoClose(undo), 'Close undone'));
+      },
+      (error) => showError('close the duplicates', error),
+    );
+  }
+
+  /** Closes the other tabs showing the same page as `tab` (in any window), with Undo. */
+  function closeDuplicatesOf(tab) {
+    const key = tab.url.split('#')[0];
+    const others = [];
+    for (const win of snapshot.windows) {
+      for (const t of tabsIn(win)) if (t.id !== tab.id && t.url.split('#')[0] === key) others.push(t.id);
+    }
+    setSelection([]);
+    api.closeTabs(others).then(
+      (undo) => showToast(`Closed ${plural(undo.count, 'duplicate tab')}`, 'Undo', () => act(api.undoClose(undo), 'Close undone')),
+      (error) => showError('close the duplicates', error),
+    );
+  }
+
+  /** Duplicates tabs (each copy next to its original), with Undo. */
+  function duplicate(tabs) {
+    api.duplicateTabs(tabs).then(
+      (copies) => showToast(`Duplicated ${plural(copies.length, 'tab')}`, 'Undo', () => act(api.undoDuplicate(copies), 'Duplicate undone')),
+      (error) => showError('duplicate that', error),
+    );
+  }
+
+  /** Opens a new tab and switches to it (the popup then closes, like after switching tabs). */
+  function newTab(where) {
+    setSelection([]);
+    act(api.openNewTab(where).then(onTabActivated));
   }
 
   /** The right-click menu for one or more selected napped links. */
@@ -906,8 +1039,10 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
     openMenu(anchor, {
       title: count === 1 ? linksById.get([...linkSelection][0])?.title || 'Link' : `${count} links`,
       items: [
-        { label: 'Wake', hint: 'Open in this window', run: () => runLinksAction('wake') },
-        { label: 'Delete', hint: 'You can undo it', run: () => runLinksAction('delete') },
+        { label: 'Wake', hint: 'Open in this window', shortcut: 'Enter', run: () => runLinksAction('wake') },
+        { label: 'Wake in a new window', run: () => runLinksAction('wake-window') },
+        SEPARATOR,
+        { label: 'Delete', hint: 'You can undo it', shortcut: KEYS.del, run: () => runLinksAction('delete') },
       ],
     });
   }
@@ -1067,7 +1202,58 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
       // In the popup this also stops Esc from closing it while tabs are selected.
       event.preventDefault();
       setSelection([]);
+    } else if (!typing && !renaming && !event.altKey && onSelectionKey(event, ctrl)) {
+      event.preventDefault();
     }
+  }
+
+  /**
+   * Keys for what's selected (or, with nothing selected, the focused row),
+   * the same as in the right-click menu:
+   *   Ctrl+Z undo · Space select/unselect the focused row · Del (or
+   *   Backspace) close tabs / delete napped links · Ctrl+G group ·
+   *   Ctrl+Shift+G ungroup · N nap.
+   * Returns true when the key was used.
+   */
+  function onSelectionKey(event, ctrl) {
+    const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+    if (key === 'z' && ctrl && !event.shiftKey) {
+      undoLast();
+      return true;
+    }
+    const row = document.activeElement?.closest?.('.row');
+    const focused = row && tree.contains(row) ? row : null;
+
+    if (key === ' ' && !ctrl && focused) {
+      if (focused.matches('.tab')) toggleSelected(Number(focused.dataset.tabId));
+      else if (focused.matches('.link')) toggleLinkSelected(focused.dataset.linkId);
+      else selectBranch(focused.parentElement, { ctrl: true, shift: false });
+      return true;
+    }
+
+    // Napped links: Del deletes them, Enter is handled by the row itself.
+    const focusedLink = focused?.matches('.link') ? focused.dataset.linkId : null;
+    if (linkSelection.size > 0 || (selection.size === 0 && focusedLink)) {
+      if ((key === 'Delete' || key === 'Backspace') && !ctrl) {
+        if (linkSelection.size === 0) toggleLinkSelected(focusedLink);
+        runLinksAction('delete');
+        return true;
+      }
+      return false;
+    }
+
+    const focusedTab = focused?.matches('.tab') ? Number(focused.dataset.tabId) : null;
+    const tabs = selection.size > 0 ? selectionFor([...selection][0]) : focusedTab !== null ? selectionFor(focusedTab) : [];
+    if (tabs.length === 0) return false;
+    if ((key === 'Delete' || key === 'Backspace') && !ctrl) runTabsAction('close', tabs);
+    else if (key === 'g' && ctrl && !event.shiftKey) runTabsAction('group', tabs);
+    else if (key === 'g' && ctrl && event.shiftKey) {
+      if (!tabs.some((tab) => tab.groupId !== -1)) return false;
+      runTabsAction('ungroup', tabs);
+    }
+    else if (key === 'n' && !ctrl && !event.shiftKey) runTabsAction('nap', tabs);
+    else return false;
+    return true;
   }
 
   function onImageError(event) {
@@ -1379,17 +1565,22 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
                 }),
               ),
             )
-          : h(
+          : item.separator
+            ? h('div', { class: 'menu-separator', role: 'separator' })
+            : h(
           'button',
           {
             class: 'menu-item',
             type: 'button',
             role: item.checked === undefined ? 'menuitem' : 'menuitemcheckbox',
             'aria-checked': item.checked === undefined ? null : String(item.checked),
+            'aria-keyshortcuts': item.shortcut ?? null,
+            // One line per item; the longer explanation is its tooltip.
+            title: item.hint ?? null,
             'data-index': index,
           },
           h('span', { class: 'menu-label' }, item.label),
-          item.hint && h('span', { class: 'menu-hint' }, item.hint),
+          item.shortcut && h('kbd', { class: 'menu-shortcut' }, item.shortcut),
         ),
       ),
       ...footer,
@@ -1520,8 +1711,18 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
       items: [
         { label: 'Nap this window', hint: 'Same as its cat button', run: () => napAndOfferUndo(api.napWindow(win.id)) },
         { label: 'Sort tabs…', hint: 'By site, title or when you last used them', run: () => openSortMenu(button, win.id) },
-        { label: 'Rename window', hint: 'Or click its name, or press F2', run: () => renameWindowInPlace(win.id) },
+        SEPARATOR,
+        { label: 'New tab', hint: 'At the end of this window', run: () => newTab({ windowId: win.id }) },
+        { label: 'New window', run: () => act(api.openNewWindow()) },
+        SEPARATOR,
+        { label: 'Sleep other tabs', hint: 'Unload every tab except the open one, to free memory', run: () => sleep(api.sleepOtherTabs(win.id)) },
+        ...(hasDuplicates(win)
+          ? [{ label: 'Close duplicate tabs', hint: 'Pages open more than once in this window: keep one of each', run: () => closeDuplicates(win.id) }]
+          : []),
+        SEPARATOR,
+        { label: 'Rename window', hint: 'Or select it and click its name', shortcut: 'F2', run: () => renameWindowInPlace(win.id) },
         ...(win.name ? [{ label: 'Remove name', hint: 'Show it as a numbered window again', run: () => act(api.renameWindow(win.id, '')) }] : []),
+        SEPARATOR,
         {
           label: 'Close window',
           hint: `Closes its ${plural(win.tabCount, 'tab')}. Undo brings them back.`,
@@ -1537,7 +1738,8 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
       items: [
         {
           label: 'Rename group',
-          hint: 'Or click its name, or press F2',
+          hint: 'Or select it and click its name',
+          shortcut: 'F2',
           run: () => startRename(tree.querySelector(`.branch.group[data-group-id="${group.id}"] > .row .renamable`)),
         },
         {
@@ -1545,11 +1747,16 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
           swatches: GROUP_COLORS.map((color) => ({ value: color, label: color, checked: color === group.color })),
           run: (color) => act(api.recolorGroup(group.id, color)),
         },
+        SEPARATOR,
+        { label: 'New tab in group', hint: 'At the end of the group', run: () => newTab({ afterTabId: group.tabs.at(-1).id }) },
+        SEPARATOR,
         {
           label: 'Ungroup',
           hint: 'Keeps the tabs open, just not in a group',
+          shortcut: KEYS.ungroup,
           run: () => ungroupGroup(group),
         },
+        SEPARATOR,
         {
           label: 'Close group',
           hint: `Closes its ${plural(group.tabs.length, 'tab')}. Undo brings them back.`,
@@ -1824,7 +2031,7 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
     const button = event.target.closest('[data-selection]');
     if (!button) return;
     const action = button.dataset.selection;
-    if (action === 'wake' || action === 'delete') runLinksAction(action);
+    if (action === 'wake' || action === 'wake-window' || action === 'delete') runLinksAction(action);
     else if (action === 'color') {
       const groupIds = selectedGroupIds();
       openColorMenu(button, groupIds, groupIds.length === 1 ? groupsById.get(groupIds[0])?.color : null);
@@ -1835,8 +2042,15 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
   function runLinksAction(action) {
     const ids = [...linksById.keys()].filter((id) => linkSelection.has(id)); // in list order
     setSelection([]);
-    if (action === 'wake') moveNapped({ kind: 'links', items: ids.map((id) => linksById.get(id)) }, {});
-    else {
+    if (action === 'wake' || action === 'wake-window') {
+      const target = action === 'wake-window' ? { newWindow: true } : {};
+      // All of one nap selected (e.g. by clicking its row): wake it as a nap,
+      // so one that came from a tab group comes back as that group.
+      const napIds = new Set(ids.map((id) => linksById.get(id)?.napId));
+      const nap = napIds.size === 1 ? napsById.get([...napIds][0]) : null;
+      if (nap && nap.links.length === ids.length) moveNapped({ kind: 'nap', item: nap }, target);
+      else moveNapped({ kind: 'links', items: ids.map((id) => linksById.get(id)) }, target);
+    } else {
       api.deleteLinks(ids).then(
         (undo) => showToast(`Deleted ${plural(undo.count, 'link')}`, 'Undo', () => act(api.putBackNaps(undo), 'Delete undone')),
         (error) => showError('delete those', error),
@@ -1881,9 +2095,33 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
     toastText.textContent = text;
     toastButton.textContent = actionLabel ?? '';
     toastButton.hidden = !actionLabel;
+    toastButton.title = actionLabel === 'Undo' ? `Undo (${KEYS.undo})` : '';
     toastAction = onAction ?? null;
+    if (actionLabel === 'Undo' && onAction) {
+      // Everything that offers Undo also goes on the Ctrl+Z history.
+      const entry = { text, run: onAction };
+      undoHistory.push(entry);
+      if (undoHistory.length > UNDO_LIMIT) undoHistory.shift();
+      toastAction = () => {
+        const index = undoHistory.indexOf(entry);
+        if (index !== -1) undoHistory.splice(index, 1);
+        onAction();
+      };
+    }
     toast.hidden = false;
     toastTimer = setTimeout(hideToast, 8000);
+  }
+
+  /** Ctrl+Z: undo the latest action that offered Undo (and wasn't undone yet). */
+  function undoLast() {
+    const entry = undoHistory.pop();
+    if (!entry) {
+      showToast('Nothing to undo');
+      return;
+    }
+    hideToast();
+    entry.run();
+    showToast(`Undone: ${entry.text}`);
   }
 
   function hideToast() {
@@ -1981,6 +2219,7 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
   function destroy() {
     destroyed = true;
     clearTimeout(toastTimer);
+    toolbarSize.disconnect();
     unsubscribe();
     document.removeEventListener('keydown', onDocumentKeydown);
     document.removeEventListener('click', onDocumentClick);
@@ -2002,6 +2241,7 @@ function buildTabRow(tab, depth) {
     tab.audible && !tab.muted && statusIcon('sound', 'Playing sound'),
     tab.muted && statusIcon('muted', 'Muted'),
     tab.discarded && statusIcon('asleep', 'Asleep: unloaded to save memory'),
+    tab.copies > 1 && statusIcon('copies', `Duplicate: this page is open in ${tab.copies} tabs`),
   ].filter(Boolean);
 
   return h(
@@ -2107,6 +2347,28 @@ function napActionButton(action, focusKey, label) {
 }
 
 /** A ⋯ button that opens a menu. */
+const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform);
+/** Shortcut labels shown in menus (and the keys onSelectionKey listens for). */
+const KEYS = {
+  group: IS_MAC ? '⌘G' : 'Ctrl+G',
+  ungroup: IS_MAC ? '⇧⌘G' : 'Ctrl+Shift+G',
+  del: IS_MAC ? '⌫' : 'Del',
+  undo: IS_MAC ? '⌘Z' : 'Ctrl+Z',
+};
+/** A line between groups of menu items. */
+const SEPARATOR = { separator: true };
+const UNDO_LIMIT = 20;
+/** localStorage flag: the "click to select · double-click to open" tip was dismissed. */
+const TIP_KEY = 'tabbies-tip-dismissed';
+
+function tipWanted() {
+  try {
+    return localStorage.getItem(TIP_KEY) !== '1';
+  } catch {
+    return true;
+  }
+}
+
 /** The colors Chrome allows for tab groups, in the order Chrome shows them. */
 const GROUP_COLORS = ['grey', 'blue', 'red', 'yellow', 'green', 'pink', 'purple', 'cyan', 'orange'];
 
@@ -2125,7 +2387,7 @@ function moreButton(action, focusKey, label) {
 
 /** Everything a tab row shows; if this is unchanged the old row is reused. */
 function rowSignature(tab, depth) {
-  return [depth, tab.title, tab.url, tab.favIconUrl, tab.active, tab.pinned, tab.audible, tab.muted, tab.discarded].join(
+  return [depth, tab.title, tab.url, tab.favIconUrl, tab.active, tab.pinned, tab.audible, tab.muted, tab.discarded, tab.copies].join(
     '\u0000',
   );
 }
