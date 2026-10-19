@@ -1046,3 +1046,98 @@
   color: var(--text);
   cursor: pointer;
 }
+
+/* "+ New tab" at the end of each window and "+ New window" after the last
+   one: quiet until you point at them, like the + in Chrome's tab strip. */
+.explorer .add-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 30px;
+  padding: 0 10px 0 calc(16px + var(--depth, 0) * 24px);
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  opacity: 0.6;
+  cursor: pointer;
+}
+
+.explorer .add-row:hover,
+.explorer .add-row:focus-visible {
+  background-color: var(--hover);
+  color: var(--text);
+  opacity: 1;
+}
+
+.explorer .tree > .add-row {
+  margin-top: 6px;
+  height: 36px;
+}
+
+/* The card shown when the mouse rests on a tab or napped link. It never
+   catches the mouse itself (pointer-events: none). */
+.explorer .hover-card {
+  position: fixed;
+  z-index: 5;
+  width: 340px;
+  max-width: calc(100vw - 16px);
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  box-shadow: var(--shadow);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.4;
+  pointer-events: none;
+}
+
+.explorer .hover-card[hidden] {
+  display: none;
+}
+
+.explorer .hover-preview {
+  display: block;
+  width: 100%;
+  max-height: 200px;
+  margin-bottom: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  object-fit: cover;
+  object-position: top;
+}
+
+.explorer .hover-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.explorer .hover-head > :first-child {
+  flex: none;
+  margin-top: 1px;
+}
+
+.explorer .hover-url {
+  display: -webkit-box;
+  margin: 4px 0 6px;
+  overflow: hidden;
+  color: var(--text-muted);
+  word-break: break-all;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.explorer .hover-fact {
+  color: var(--text-muted);
+}
+
+.explorer .hover-note {
+  font-style: italic;
+}

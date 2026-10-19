@@ -10,10 +10,11 @@ const explorer = startView();
 // put the cursor in the search box so you can type and press Enter right away.
 // Switching tabs fires `visibilitychange`; switching between two visible
 // windows only fires the window's `focus` event.
+// Not while you're in the middle of something (tabs selected, a menu open).
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden) explorer.focusSearch();
+  if (!document.hidden) explorer.focusSearch({ whenIdle: true });
 });
-window.addEventListener('focus', () => explorer.focusSearch());
+window.addEventListener('focus', () => explorer.focusSearch({ whenIdle: true }));
 
 showShortcut();
 

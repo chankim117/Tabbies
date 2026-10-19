@@ -15,6 +15,10 @@
 import {
   applyFullTabPin,
   applyToolbarAction,
+  capturePreview,
+  forgetPreview,
+  movePreview,
+  readSettings,
   napAllWindows,
   napTabs,
   napWindow,
@@ -27,6 +31,7 @@ import {
 // and again whenever the setting changes.
 applyToolbarAction().catch((error) => console.error('Tabbies: could not set up the toolbar icon', error));
 onSettingsChanged((settings) => {
+  previewsOn = settings.pagePreviews;
   applyToolbarAction(settings).catch((error) => console.error('Tabbies: could not set up the toolbar icon', error));
   // "Keep the Tabbies tab pinned": pin or unpin a Tabbies tab that's already open.
   applyFullTabPin(settings).catch((error) => console.error('Tabbies: could not pin the Tabbies tab', error));
@@ -92,3 +97,49 @@ async function showNapped(napping) {
     console.error('Tabbies: could not nap', error);
   }
 }
+
+// ---- Page previews (Settings → Page previews; off unless you turn it on) ----------------
+// A moment after you switch to a tab, or after the tab you're looking at
+// finishes loading, take a small snapshot of it for the hover card. Waiting a
+// moment skips tabs you only pass through, and Chrome allows only a couple of
+// snapshots per second. See shared/previews-api.js.
+let previewsOn = false;
+const previewsReady = readSettings().then((settings) => {
+  previewsOn = settings.pagePreviews;
+});
+const captureTimers = new Map(); // window id → pending snapshot
+
+function schedulePreview(windowId, delay) {
+  previewsReady.then(() => {
+    if (!previewsOn) return;
+    clearTimeout(captureTimers.get(windowId));
+    captureTimers.set(
+      windowId,
+      setTimeout(() => {
+        captureTimers.delete(windowId);
+        // Fails quietly when there's nothing to photograph (a minimized
+        // window, a chrome:// page) or the permission was taken back.
+        capturePreview(windowId).catch(() => {});
+      }, delay),
+    );
+  });
+}
+
+chrome.tabs.onActivated.addListener(({ windowId }) => schedulePreview(windowId, 700));
+chrome.tabs.onUpdated.addListener((tabId, change, tab) => {
+  // A finished load, or a site changing its address without reloading
+  // (YouTube, Gmail…): take a fresh snapshot of what's showing now.
+  if (tab.active && (change.status === 'complete' || change.url)) schedulePreview(tab.windowId, 900);
+});
+// Switching to another window shows that window's tab.
+chrome.windows.onFocusChanged.addListener((windowId) => {
+  if (windowId !== chrome.windows.WINDOW_ID_NONE) schedulePreview(windowId, 700);
+});
+chrome.tabs.onRemoved.addListener((tabId) => {
+  previewsReady.then(() => previewsOn && forgetPreview(tabId)).catch(() => {});
+});
+// chrome.tabs.onReplaced: Chrome swapped a tab for a new one (e.g. it was put
+// to sleep), with a new id. The snapshot moves along.
+chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => {
+  previewsReady.then(() => previewsOn && movePreview(removedTabId, addedTabId)).catch(() => {});
+});

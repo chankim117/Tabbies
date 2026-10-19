@@ -58,6 +58,19 @@ export function createSettings(container, api, { onClose } = {}) {
           'Chrome will ask to let Tabbies read and change your bookmarks. Turn it on on each computer.',
       ),
     ),
+    section(
+      'Page previews',
+      null,
+      toggle(
+        'pagePreviews',
+        'Show a preview of the page when you point at a tab',
+        'Tabbies takes a small snapshot of each page while you’re looking at it, and shows it in the card that ' +
+          'appears when you point at that tab later. Pages you haven’t looked at since have no preview. Chrome will ' +
+          'ask to let Tabbies “read and change all your data on all websites”: it’s used only for these snapshots, ' +
+          'which stay on this computer and are forgotten when Chrome closes. Turn it on on each computer.',
+      ),
+      h('p', { class: 'settings-hint preview-status' }),
+    ),
   );
 
   const extras = [
@@ -109,6 +122,25 @@ export function createSettings(container, api, { onClose } = {}) {
     for (const input of form.querySelectorAll('input')) {
       input.checked = input.type === 'checkbox' ? Boolean(settings[input.name]) : settings[input.name] === input.value;
     }
+    showPreviewStatus(settings);
+  }
+
+  /** Under the Page previews switch: how many snapshots there are, or what's wrong. */
+  async function showPreviewStatus(settings) {
+    const line = form.querySelector('.preview-status');
+    if (!line) return;
+    if (!settings.pagePreviews) {
+      line.textContent = '';
+      return;
+    }
+    if (!(await api.hasPreviewPermission())) {
+      line.textContent = 'Chrome’s permission for previews is missing (it can be removed at chrome://extensions). Turn this off and on again to ask for it.';
+      return;
+    }
+    const { count, lastError } = await api.previewStatus();
+    line.textContent =
+      (count === 0 ? 'No snapshots yet: open a few tabs and they’ll appear.' : `${count === 1 ? '1 snapshot' : `${count} snapshots`} so far.`) +
+      (lastError ? ` The last one didn’t work: ${lastError}` : '');
   }
 
   function onChange(event) {
@@ -117,8 +149,28 @@ export function createSettings(container, api, { onClose } = {}) {
       changeNapSync(input);
       return;
     }
+    if (input.name === 'pagePreviews') {
+      changePreviews(input);
+      return;
+    }
     const value = input.type === 'checkbox' ? input.checked : input.value;
     api.saveSettings({ [input.name]: value }).then(() => showStatus('Saved'));
+  }
+
+  function changePreviews(input) {
+    if (!input.checked) {
+      api.stopPreviews().then(() => api.saveSettings({ pagePreviews: false })).then(() => showStatus('Previews off; snapshots forgotten'));
+      return;
+    }
+    // Ask right away, while the click still counts (see changeNapSync).
+    api.requestPreviewPermission().then((granted) => {
+      if (!granted) {
+        input.checked = false;
+        showStatus('Previews stay off');
+        return;
+      }
+      api.saveSettings({ pagePreviews: true }).then(() => showStatus('Previews on: pages you look at from now on get one'));
+    });
   }
 
   function changeNapSync(input) {
@@ -163,7 +215,10 @@ export function createSettings(container, api, { onClose } = {}) {
 
   // Coming back from Chrome's shortcuts page: show the keys as they are now.
   function onVisibilityChange() {
-    if (!document.hidden) showShortcuts();
+    if (document.hidden) return;
+    showShortcuts();
+    // The snapshot count changes as you browse.
+    api.readSettings().then(showPreviewStatus);
   }
 
   async function downloadBackup() {

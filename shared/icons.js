@@ -29,6 +29,7 @@ const PATHS = {
   color: '<circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 0 0 18z" fill="currentColor"/>',
   // Two overlapping pages: "this page is open more than once".
   copies: '<rect x="8" y="8" width="13" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/>',
+  plus: '<path d="M12 5v14"/><path d="M5 12h14"/>',
   newWindow: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/><path d="M12 12v5"/><path d="M9.5 14.5h5"/>',
   sort: '<path d="m21 16-4 4-4-4"/><path d="M17 20V4"/><path d="m3 8 4-4 4 4"/><path d="M7 4v16"/>',
   // A sun coming up: "wake" napped tabs.

@@ -8,7 +8,7 @@
 // through chrome.storage.onChanged, so a change applies everywhere right away.
 
 /** Settings that stay on this computer instead of syncing. */
-const DEVICE_SETTINGS = ['syncNaps'];
+const DEVICE_SETTINGS = ['syncNaps', 'pagePreviews'];
 
 /** @typedef {typeof DEFAULT_SETTINGS} Settings */
 export const DEFAULT_SETTINGS = {
@@ -24,6 +24,8 @@ export const DEFAULT_SETTINGS = {
   pinFullTab: false,
   /** Keep naps in a synced bookmarks folder (this computer only; needs the bookmarks permission). */
   syncNaps: false,
+  /** Show a snapshot of the page when you point at a tab (this computer only; needs access to all sites). */
+  pagePreviews: false,
 };
 
 /** @returns {Promise<Settings>} */

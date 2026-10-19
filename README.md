@@ -35,6 +35,7 @@ Click ⚙ in any Tabbies view, or right-click the Tabbies icon → **Options**. 
 ### Tree view
 
 - Windows → tab groups → tabs. Click the arrow (or double-click the row) to expand or collapse a window or group.
+- **＋ New tab** at the end of each window and **＋ New window** after the last one (also in the right-click menus).
 - **Clicks work like files and folders on a desktop:** one click selects, a double-click opens. Double-click a tab to switch to it; one click on a window or group selects it with all its tabs.
 - Windows show their tab count, and the window you opened Tabbies from is marked **Current**.
 - **Name your windows** ("Work", "Dinner plans"…) like folders: select the window, click its name and type, then Enter or just move the mouse away (Esc cancels). F2 or the window's ⋯ menu work too. Names stay after Chrome restarts, as long as the window comes back with mostly the same tabs. Naps are renamed the same way.
@@ -43,6 +44,8 @@ Click ⚙ in any Tabbies view, or right-click the Tabbies icon → **Options**. 
 - Tabs show the site icon, title and site, plus small icons for **playing sound**, **muted**, **pinned** and **asleep** (unloaded by Chrome to save memory).
 - **Search** by title or URL as you type. Windows and groups with no matches are hidden.
 - **Live updates:** the tree follows every change you make anywhere in Chrome.
+- **Hover card:** rest the mouse on a tab for a moment to see its full title and address, when you last used it, whether it's asleep, pinned or playing sound, its window and group, and whether it's open more than once. Napped links show which nap they're in.
+- **Page previews** (optional, Settings → Page previews): the hover card also shows a snapshot of the page. Chrome only lets extensions photograph the tab you're looking at, so a tab gets its preview the next time you look at it. Until then its card says "No preview yet". If a site has since moved to another page (YouTube, Gmail…), the card shows the earlier snapshot and says so. Settings shows how many snapshots there are, and warns if Chrome's permission went missing.
 - A window's row stays at the top while you scroll through its tabs, so you always see which window you're in.
 - The first time you open Tabbies, a small tip explains the clicks (click to select, double-click to open, right-click for more). **Got it** hides it for good.
 - **Light and dark mode** follow your system setting.
@@ -196,8 +199,9 @@ To include incognito windows, open **Details** on the Tabbies card and turn on *
 - `storage`: keep your naps and settings (settings sync with your Chrome profile).
 - `contextMenus`: the Nap items when you right-click the Tabbies icon.
 - `bookmarks` (optional, asked only if you turn on **Sync naps**): keep naps in a synced bookmarks folder.
+- Access to all sites (optional, asked only if you turn on **Page previews**): take a small snapshot of the page you're looking at, for the hover card. Chrome lists this as "Read and change all your data on all websites". Turning previews off gives it back.
 
-Tabbies never reads page content and doesn't send your data anywhere. Site icons are loaded from the icon address Chrome reports for each tab, usually straight from the browser cache.
+Unless you turn on Page previews, Tabbies never reads page content. It never sends your data anywhere: snapshots stay in memory on your computer and are forgotten when Chrome closes. Site icons are loaded from the icon address Chrome reports for each tab, usually straight from the browser cache.
 
 ## Project layout
 

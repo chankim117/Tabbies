@@ -43,7 +43,7 @@ const LAST_VIEW_KEY = 'tabbies-last-view';
  * @param {boolean} [options.autofocus]         Put the cursor in the search box on start.
  * @param {() => void} [options.onTabActivated] Called after switching to a tab
  *                                              (the popup closes itself then).
- * @returns {{ refresh(): Promise<void>, focusSearch(): void, destroy(): void }}
+ * @returns {{ refresh(): Promise<void>, focusSearch(options?: { whenIdle?: boolean }): void, destroy(): void }}
  */
 export function createExplorer(container, api, { autofocus = false, onTabActivated = () => {} } = {}) {
   // ---- State ------------------------------------------------------------------
@@ -89,6 +89,8 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
   let renderAfterDrag = false;
   let renaming = false; // a name is being edited in place (see startRename)
   let renameEndedAt = -Infinity;
+  let hoverRow = null; // the tab or link row the mouse rests on
+  let hoverTimer = 0;
   const undoHistory = []; // { text, run } for Ctrl+Z, newest last (see showToast)
   let nameGroupWhenShown = null; // a group just made with "Group": name it once it appears
   let destroyed = false;
@@ -196,6 +198,9 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
     }
   });
 
+  // The card that appears when you rest the mouse on a tab or napped link.
+  const hoverCard = h('div', { class: 'hover-card', role: 'tooltip', hidden: true });
+
   const toolbar = h(
     'div',
     { class: 'toolbar' },
@@ -207,6 +212,7 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
     toolbar,
     tip,
     tree,
+    hoverCard,
     message,
     dropZones,
     announcer,
@@ -228,6 +234,11 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
   });
   toolbarSize.observe(toolbar);
   tree.addEventListener('contextmenu', onTreeContextMenu);
+  tree.addEventListener('pointerover', onRowPointerOver);
+  tree.addEventListener('pointerout', onRowPointerOut);
+  // Anything you do hides the card: press, scroll, type, drag.
+  for (const type of ['pointerdown', 'keydown', 'dragstart', 'wheel']) document.addEventListener(type, hideHoverCard, true);
+  window.addEventListener('scroll', hideHoverCard, true);
   tree.addEventListener('keyup', (event) => {
     if (event.key === ' ' && event.target.closest('.row')) event.preventDefault();
   });
@@ -426,6 +437,7 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
         shown += rendered.shown;
       }
     });
+    if (snapshot && ctx.terms.length === 0) elements.push(addRow('new-window', 'New window', { style: '--depth: 0' }));
     const naps = snapshot ? renderNaps(snapshot.naps, ctx) : null;
     if (naps) elements.push(naps.element);
 
@@ -479,6 +491,8 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
     }
     // While searching, hide windows without a single matching tab.
     if (ctx.terms.length > 0 && shown === 0) return null;
+    // "+ New tab" at the end of the window, like the + in Chrome's tab strip.
+    if (ctx.terms.length === 0) children.push(addRow('new-tab', 'New tab', { 'data-window-id': win.id, style: '--depth: 1' }));
 
     const activeTab = findActiveTab(win);
     const header = [
@@ -783,6 +797,15 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
       openSortMenu(button, Number(button.closest('[data-window-id]').dataset.windowId));
       return;
     }
+    if (action === 'new-tab') {
+      newTab({ windowId: Number(button.dataset.windowId) });
+      return;
+    }
+    if (action === 'new-window') {
+      setSelection([]);
+      act(api.openNewWindow());
+      return;
+    }
     if (action === 'nap-window') {
       const windowId = Number(button.closest('[data-window-id]').dataset.windowId);
       napAndOfferUndo(api.napWindow(windowId));
@@ -866,6 +889,97 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
     } else if (action === 'mute') {
       act(api.setTabMuted(tab, !tab.muted));
     }
+  }
+
+  // ---- Hover card ------------------------------------------------------------------------
+  // Rest the mouse on a tab (or napped link) for a moment and a card shows
+  // more about it: full title and address, when you last used it, its state,
+  // and (if Settings → Page previews is on) a snapshot of the page.
+
+  function onRowPointerOver(event) {
+    if (event.pointerType === 'touch') return;
+    const row = event.target.closest('.row.tab, .row.link');
+    if (row === hoverRow) return;
+    hideHoverCard();
+    hoverRow = row;
+    if (row) hoverTimer = setTimeout(() => showHoverCard(row), HOVER_DELAY);
+  }
+
+  function onRowPointerOut(event) {
+    if (hoverRow && !hoverRow.contains(event.relatedTarget)) {
+      hideHoverCard();
+      hoverRow = null;
+    }
+  }
+
+  function hideHoverCard() {
+    clearTimeout(hoverTimer);
+    hoverCard.hidden = true;
+  }
+
+  function showHoverCard(row) {
+    if (!row.isConnected || renaming || dragDrop.isDragging() || menu.matches(':popover-open')) return;
+    const tab = row.matches('.tab') ? tabsById.get(Number(row.dataset.tabId)) : null;
+    const link = row.matches('.link') ? linksById.get(row.dataset.linkId) : null;
+    if (!tab && !link) return;
+    const item = tab ?? link;
+    hoverCard.replaceChildren(
+      h('div', { class: 'hover-head' }, row.querySelector('.favicon')?.cloneNode(true), h('strong', {}, item.title)),
+      h('div', { class: 'hover-url' }, item.url),
+      ...(tab ? tabFacts(tab) : linkFacts(link)).map((fact) => h('div', { class: 'hover-fact' }, fact)),
+    );
+    hoverCard.hidden = false;
+    placeHoverCard(row);
+    if (tab && snapshot?.settings.pagePreviews) {
+      api.getPreview(tab).then((preview) => {
+        if (hoverRow !== row || hoverCard.hidden) return;
+        if (!preview) {
+          // Chrome can only photograph the tab that's showing, so a tab you
+          // haven't looked at (with previews on) has none yet.
+          hoverCard.append(h('div', { class: 'hover-fact hover-note' }, 'No preview yet: it\u2019s taken when you next look at this tab'));
+        } else {
+          hoverCard.prepend(
+            h('img', { class: 'hover-preview', src: preview.image, alt: '' }),
+            ...(preview.samePage ? [] : [h('div', { class: 'hover-fact hover-note' }, `Snapshot of an earlier page on this site, ${formatAgo(preview.at)}`)]),
+          );
+        }
+        placeHoverCard(row);
+      }, () => {});
+    }
+  }
+
+  /** The lines under a tab's address in its hover card. */
+  function tabFacts(tab) {
+    const group = tab.groupId !== -1 ? groupsById.get(tab.groupId) : null;
+    const state = [
+      tab.pinned && 'Pinned',
+      tab.discarded && 'Asleep (unloaded to save memory)',
+      tab.audible && !tab.muted && 'Playing sound',
+      tab.muted && 'Muted',
+    ].filter(Boolean);
+    return [
+      tab.active ? 'Showing now in its window' : tab.lastAccessed ? `Last used ${formatAgo(tab.lastAccessed)}` : null,
+      state.length > 0 ? state.join(' · ') : null,
+      `In ${windowLabel(tab.windowId)}${group ? ` · group “${group.title || 'unnamed'}”` : ''}`,
+      tab.copies > 1 ? `Also open in ${plural(tab.copies - 1, 'other tab')}` : null,
+    ].filter(Boolean);
+  }
+
+  function linkFacts(link) {
+    const nap = napsById.get(link.napId);
+    return [nap ? `In the nap “${napName(nap)}” · napped ${formatNapDate(nap.createdAt)}` : null, 'Double-click to open it again'].filter(Boolean);
+  }
+
+  /** Under the row (or above it, if there's no room), lined up with its title. */
+  function placeHoverCard(row) {
+    const at = row.querySelector('.title')?.getBoundingClientRect() ?? row.getBoundingClientRect();
+    const rowBox = row.getBoundingClientRect();
+    const box = hoverCard.getBoundingClientRect();
+    const left = Math.max(8, Math.min(at.left, innerWidth - box.width - 8));
+    let top = rowBox.bottom + 4;
+    if (top + box.height > innerHeight - 8) top = Math.max(8, rowBox.top - box.height - 4);
+    hoverCard.style.left = `${left}px`;
+    hoverCard.style.top = `${top}px`;
   }
 
   /**
@@ -2180,8 +2294,17 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
     refresh();
   }
 
-  function focusSearch() {
-    searchInput.focus();
+  /**
+   * Puts the cursor in the search box. With `whenIdle` (coming back to the
+   * Tabbies tab), it leaves things alone while you're in the middle of
+   * something: tabs selected (the selection bar covers the box), a menu open,
+   * or a name being edited.
+   */
+  function focusSearch({ whenIdle = false } = {}) {
+    if (whenIdle && (selection.size + linkSelection.size > 0 || renaming || menu.matches(':popover-open') || dialog.open)) return;
+    // preventScroll: the box is in the sticky toolbar, and focusing it could
+    // otherwise make Chrome scroll the page back up to where it started.
+    searchInput.focus({ preventScroll: true });
     searchInput.select();
   }
 
@@ -2236,6 +2359,9 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
   function destroy() {
     destroyed = true;
     clearTimeout(toastTimer);
+    hideHoverCard();
+    for (const type of ['pointerdown', 'keydown', 'dragstart', 'wheel']) document.removeEventListener(type, hideHoverCard, true);
+    window.removeEventListener('scroll', hideHoverCard, true);
     toolbarSize.disconnect();
     unsubscribe();
     document.removeEventListener('keydown', onDocumentKeydown);
@@ -2271,7 +2397,6 @@ function buildTabRow(tab, depth) {
         type: 'button',
         'data-action': 'activate',
         'data-focus-key': `tab:${tab.id}`,
-        title: tab.url ? `${tab.title}\n${tab.url.slice(0, 300)}` : tab.title,
       },
       favicon(tab),
       h('span', { class: 'title' }, tab.title),
@@ -2321,7 +2446,6 @@ function buildLinkRow(link, nap) {
         type: 'button',
         'data-action': 'wake-link',
         'data-focus-key': `link:${link.id}`,
-        title: `Open again: ${link.title}\n${link.url.slice(0, 300)}`,
       },
       favicon(link),
       h('span', { class: 'title' }, link.title),
@@ -2365,6 +2489,20 @@ function napActionButton(action, focusKey, label) {
 
 /** A ⋯ button that opens a menu. */
 const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform);
+/** How long the mouse rests on a row before its hover card shows (ms). */
+const HOVER_DELAY = 600;
+
+/** "just now", "5 min ago", "3 h ago", "2 days ago", or a date. */
+function formatAgo(time) {
+  const minutes = Math.round((Date.now() - time) / 60_000);
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} h ago`;
+  const days = Math.round(hours / 24);
+  if (days < 14) return days === 1 ? 'yesterday' : `${days} days ago`;
+  return `on ${formatNapDate(time)}`;
+}
 /** Shortcut labels shown in menus (and the keys onSelectionKey listens for). */
 const KEYS = {
   group: IS_MAC ? '⌘G' : 'Ctrl+G',
@@ -2392,6 +2530,11 @@ const GROUP_COLORS = ['grey', 'blue', 'red', 'yellow', 'green', 'pink', 'purple'
 /** "the group Reading", or "the unnamed group". */
 function groupLabel(group) {
   return group.title ? `the group ${group.title}` : 'the unnamed group';
+}
+
+/** A quiet "+ New tab" / "+ New window" line in the tree (not a row: it can't be selected or dragged). */
+function addRow(action, label, attributes) {
+  return h('button', { class: 'add-row', type: 'button', 'data-action': action, ...attributes }, icon('plus'), h('span', {}, label));
 }
 
 function moreButton(action, focusKey, label) {

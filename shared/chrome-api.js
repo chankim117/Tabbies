@@ -49,6 +49,7 @@
 // @property {boolean} incognito
 // @property {boolean} highlighted  multi-selected in Chrome's tab strip (Ctrl+click there)
 // @property {number} copies      how many open tabs show this same page (1 = no duplicates)
+// @property {number} lastAccessed  when it was last the shown tab of its window (ms), 0 if unknown
 //
 // @typedef {object} GroupNode
 // @property {'group'} kind
@@ -90,6 +91,7 @@ import { readSettings } from './settings-api.js';
 // pages get them through this module like everything else.
 export * from './naps-api.js';
 export * from './settings-api.js';
+export * from './previews-api.js';
 
 const TABBIES_URL = chrome.runtime.getURL('tabbies.html');
 
@@ -1064,6 +1066,8 @@ function toTabNode(tab, copies) {
     incognito: tab.incognito,
     highlighted: tab.highlighted,
     copies: copies?.get(duplicateKey(tab)) ?? 1,
+    // When the tab was last the one showing in its window (Chrome 121+).
+    lastAccessed: tab.lastAccessed ?? 0,
   };
 }
 
