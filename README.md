@@ -51,7 +51,7 @@ Click ⚙ in any Tabbies view, or right-click the Tabbies icon → **Options**. 
 
 Double-click a tab (or press Enter on it) to switch to it; its window comes to the front.
 
-Each row keeps just its main buttons, always faintly visible and brighter under the mouse: **nap** and **close** on tabs (plus **unmute/mute** on tabs that play sound), **nap**, **⋯** and **close** on windows and groups.
+Each row keeps just its main buttons, always faintly visible and brighter under the mouse: **nap** and **close** on tabs (plus **unmute/mute** on tabs that play sound), **nap**, **⋯** and **close** on groups, plus **sort** (⇅) on windows.
 
 **Right-click any row** for everything else, like on a desktop:
 
@@ -88,7 +88,7 @@ Selected rows that sit next to each other join into one blue block. The tab each
 
 ### Sorting a window
 
-Open a window's ⋯ menu (or right-click it) and choose **Sort tabs…**:
+Click the sort button (⇅) on a window's row, or choose **Sort tabs…** from its ⋯ or right-click menu:
 
 | Sort | What it does |
 | --- | --- |

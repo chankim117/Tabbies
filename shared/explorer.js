@@ -494,6 +494,19 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
       h('span', { class: 'count' }, countLabel(shown, win.tabCount, ctx)),
     ];
     const napButton = napActionButton('nap-window', `window:${win.id}:nap`, `Nap the tabs in ${label}`);
+    const sortButton = h(
+      'button',
+      {
+        class: 'action sort',
+        type: 'button',
+        'data-action': 'sort',
+        'data-focus-key': `window:${win.id}:sort`,
+        title: 'Sort tabs',
+        'aria-label': `Sort the tabs in ${label}`,
+        'aria-haspopup': 'menu',
+      },
+      icon('sort'),
+    );
     const menuButton = moreButton('window-menu', `window:${win.id}:menu`, `More for ${label}`);
     const closeButton = h(
       'button',
@@ -513,7 +526,7 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
       kind: 'window',
       header,
       children,
-      actions: [napButton, menuButton, closeButton],
+      actions: [napButton, sortButton, menuButton, closeButton],
       attributes: { 'data-window-id': win.id },
       dragLabel: `Drag to merge ${label} into another window`,
     });
@@ -764,6 +777,10 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
         return;
       }
       selectBranch(row.parentElement, { ctrl, shift: event.shiftKey });
+      return;
+    }
+    if (action === 'sort') {
+      openSortMenu(button, Number(button.closest('[data-window-id]').dataset.windowId));
       return;
     }
     if (action === 'nap-window') {
