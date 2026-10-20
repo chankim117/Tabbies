@@ -43,7 +43,7 @@ TAB TOOLS
 • Spot and close duplicate tabs.
 • Pin, mute, reload, duplicate, or put tabs to sleep to free memory.
 • Rest the mouse on a tab to see its full address, when you last used it, and more. Optional page previews.
-• Ctrl+Z undoes closing, napping, grouping and sorting.
+• Ctrl+Z undoes closing, napping, grouping and sorting; Ctrl+Y redoes.
 
 YOUR WAY
 • Opens in a full tab (Alt+T), Chrome's side panel, or a popup.
