@@ -42,4 +42,4 @@ If this policy changes, the new version will be published here with a new date.
 
 ## Contact
 
-Questions about this policy: [your contact email]
+Questions about this policy: [chankim.dev117@gmail.com]
