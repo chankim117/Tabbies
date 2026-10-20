@@ -27,6 +27,7 @@ import { icon } from './icons.js';
 import { enableDragAndDrop } from './drag-drop.js';
 import { SORT_ORDERS } from './sorting.js';
 import { formatNapDate, napName } from './nap-data.js';
+import { readTipState, writeTipState } from './tip-state.js';
 
 // The Tab Nap cat marks everything to do with Naps: the full drawing where
 // it's shown large, a simplified one for buttons and headings.
@@ -43,7 +44,7 @@ const LAST_VIEW_KEY = 'tabbies-last-view';
  * @param {boolean} [options.autofocus]         Put the cursor in the search box on start.
  * @param {() => void} [options.onTabActivated] Called after switching to a tab
  *                                              (the popup closes itself then).
- * @returns {{ refresh(): Promise<void>, focusSearch(options?: { whenIdle?: boolean }): void, destroy(): void }}
+ * @returns {{ refresh(): Promise<void>, focusSearch(options?: { whenIdle?: boolean }): void, showTip(): void, destroy(): void }}
  */
 export function createExplorer(container, api, { autofocus = false, onTabActivated = () => {} } = {}) {
   // ---- State ------------------------------------------------------------------
@@ -91,7 +92,8 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
   let renameEndedAt = -Infinity;
   let hoverRow = null; // the tab or link row the mouse rests on
   let hoverTimer = 0;
-  const undoHistory = []; // { text, run } for Ctrl+Z, newest last (see showToast)
+  const undoHistory = []; // { text, undo } for Ctrl+Z, newest last (see offerUndo)
+  const redoHistory = []; // { text, redo } for Ctrl+Y, newest last
   let nameGroupWhenShown = null; // a group just made with "Group": name it once it appears
   let destroyed = false;
 
@@ -182,20 +184,46 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
   const toast = h('div', { class: 'toast', role: 'status', hidden: true }, toastText, toastButton);
 
   container.classList.add('explorer');
-  // A one-time tip: in a browser people expect one click to switch tabs.
+  // A tip under the toolbar: how the clicks work, handy keys… Each time
+  // Tabbies opens it shows the next tip you haven't retired. "Got it" retires
+  // a tip and shows the next, "Next" skips to another one, ✕ closes the
+  // banner until next time, "Hide tips" turns them all off.
+  const tipText = h('span', { class: 'tip-text' });
   const tip = h(
     'div',
-    { class: 'tip', role: 'note', hidden: !tipWanted() },
-    h('span', {}, h('b', {}, 'Click'), ' to select · ', h('b', {}, 'double-click'), ' to open · ', h('b', {}, 'right-click'), ' for more'),
-    h('button', { type: 'button', class: 'tip-close', 'aria-label': 'Got it, hide this tip' }, 'Got it'),
+    { class: 'tip', role: 'note', hidden: true },
+    h('span', { class: 'tip-label' }, 'Tip'),
+    tipText,
+    h(
+      'span',
+      { class: 'tip-buttons' },
+      h('button', { type: 'button', class: 'tip-button ghost', 'data-tip': 'next', title: 'Show another tip' }, 'Next'),
+      h('button', { type: 'button', class: 'tip-button', 'data-tip': 'done', title: 'Don’t show this tip again' }, 'Got it'),
+      h('button', { type: 'button', class: 'tip-button ghost', 'data-tip': 'off', title: 'Turn tips off' }, 'Hide tips'),
+      h('button', { type: 'button', class: 'tip-button ghost tip-dismiss', 'data-tip': 'close', title: 'Close for now (tips come back next time)', 'aria-label': 'Close the tip for now' }, icon('close')),
+    ),
   );
-  tip.querySelector('.tip-close').addEventListener('click', () => {
-    tip.hidden = true;
-    try {
-      localStorage.setItem(TIP_KEY, '1');
-    } catch {
-      // storage blocked: the tip just comes back next time
-    }
+  let tipShown = null; // id of the tip on screen
+  tip.addEventListener('click', onTipClick);
+
+  // Every shortcut, opened with "?" (or from a tip, or the right-click menu).
+  const shortcutsBody = h('div', { class: 'shortcuts' });
+  const shortcutsDialog = h(
+    'dialog',
+    { class: 'dialog shortcuts-dialog', 'aria-labelledby': 'tabbies-shortcuts-title' },
+    h('h2', { class: 'dialog-title', id: 'tabbies-shortcuts-title' }, 'Keyboard shortcuts'),
+    shortcutsBody,
+    h(
+      'div',
+      { class: 'dialog-buttons' },
+      h('button', { class: 'button', type: 'button', 'data-shortcuts': 'change' }, 'Change Chrome-wide keys…'),
+      h('button', { class: 'button primary', type: 'button', 'data-shortcuts': 'close' }, 'Close'),
+    ),
+  );
+  shortcutsDialog.addEventListener('click', (event) => {
+    const what = event.target.closest('[data-shortcuts]')?.dataset.shortcuts;
+    if (what === 'close' || event.target === shortcutsDialog) shortcutsDialog.close();
+    else if (what === 'change') act(api.openShortcutsPage());
   });
 
   // The card that appears when you rest the mouse on a tab or napped link.
@@ -219,6 +247,8 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
     menu,
     dialog,
     toast,
+    // after the other dialog, so it is the second .dialog on the page
+    shortcutsDialog,
   );
 
   searchInput.addEventListener('input', () => setQuery(searchInput.value));
@@ -236,8 +266,10 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
   tree.addEventListener('contextmenu', onTreeContextMenu);
   tree.addEventListener('pointerover', onRowPointerOver);
   tree.addEventListener('pointerout', onRowPointerOut);
-  // Anything you do hides the card: press, scroll, type, drag.
-  for (const type of ['pointerdown', 'keydown', 'dragstart', 'wheel']) document.addEventListener(type, hideHoverCard, true);
+  // The card stays while the mouse is on its row (clicking to select included);
+  // moving off the row hides it (onRowPointerOut), and so do a right-click menu,
+  // dragging, scrolling and typing.
+  for (const type of HOVER_CARD_HIDERS) document.addEventListener(type, hideHoverCard, true);
   window.addEventListener('scroll', hideHoverCard, true);
   tree.addEventListener('keyup', (event) => {
     if (event.key === ' ' && event.target.closest('.row')) event.preventDefault();
@@ -315,8 +347,9 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
   const unsubscribe = api.subscribe(refresh);
   refresh();
   if (autofocus) focusSearch();
+  showNextTip();
 
-  return { refresh, focusSearch, destroy };
+  return { refresh, focusSearch, destroy, showTip: () => tip.hidden && showNextTip() };
 
   // ---- Loading ------------------------------------------------------------------------
 
@@ -891,6 +924,77 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
     }
   }
 
+  // ---- Tips and the shortcuts cheat sheet ----------------------------------------------
+
+  /** Shows the next tip that hasn't been retired (after the one shown last time). */
+  async function showNextTip(afterId) {
+    const state = readTipState();
+    if (state.off) {
+      tip.hidden = true;
+      return;
+    }
+    const keys = await chromeKeys();
+    const tips = TIPS.filter((t) => !state.done.includes(t.id) && t.text(keys));
+    if (tips.length === 0) {
+      tip.hidden = true;
+      return;
+    }
+    // The first one after it in TIPS order (it may have just been retired), wrapping around.
+    const after = TIPS.findIndex((t) => t.id === (afterId ?? state.last));
+    const next = tips.find((t) => TIPS.indexOf(t) > after) ?? tips[0];
+    tipShown = next.id;
+    tipText.replaceChildren(...next.text(keys));
+    tip.hidden = false;
+    writeTipState({ ...state, last: next.id });
+  }
+
+  function onTipClick(event) {
+    const what = event.target.closest('[data-tip]')?.dataset.tip;
+    if (event.target.closest('[data-open-shortcuts]')) openShortcuts();
+    if (!what) return;
+    const state = readTipState();
+    if (what === 'next') {
+      showNextTip(tipShown);
+    } else if (what === 'done') {
+      // Retire it and go straight on to the next one (the banner closes after the last).
+      writeTipState({ ...state, done: [...new Set([...state.done, tipShown])] });
+      showNextTip(tipShown);
+    } else if (what === 'close') {
+      tip.hidden = true;
+    } else if (what === 'off') {
+      writeTipState({ ...state, off: true });
+      tip.hidden = true;
+      showToast('Tips are off. Press ? any time for the keyboard shortcuts.');
+    }
+  }
+
+  /** The Chrome-wide keys as you have them now: { open, napTab, napWindow } ('' when not set). */
+  async function chromeKeys() {
+    const list = await api.getShortcuts().catch(() => []);
+    const key = (name) => list.find((c) => c.name === name)?.shortcut ?? '';
+    return { open: key('_execute_action'), napTab: key('nap-tab'), napWindow: key('nap-current-window') };
+  }
+
+  async function openShortcuts() {
+    const keys = await chromeKeys();
+    const row = ([combo, what]) => [h('dt', {}, ...keyLabels(combo)), h('dd', {}, what)];
+    shortcutsBody.replaceChildren(
+      h('h3', {}, 'Anywhere in Chrome'),
+      h(
+        'dl',
+        {},
+        ...[
+          [keys.open || 'not set', 'Open or close Tabbies'],
+          [keys.napTab || 'not set', 'Nap the tab you’re looking at'],
+          [keys.napWindow || 'not set', 'Nap every tab in the window'],
+        ].flatMap(row),
+      ),
+      h('h3', {}, 'In Tabbies'),
+      h('dl', {}, ...IN_TABBIES_KEYS.flatMap(row)),
+    );
+    if (!shortcutsDialog.open) shortcutsDialog.showModal();
+  }
+
   // ---- Hover card ------------------------------------------------------------------------
   // Rest the mouse on a tab (or napped link) for a moment and a card shows
   // more about it: full title and address, when you last used it, its state,
@@ -999,6 +1103,8 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
           { label: 'New window', run: () => act(api.openNewWindow()) },
           { label: 'Nap every window', hint: 'All tabs except pinned ones, into one nap', run: () => napAndOfferUndo(api.napAllWindows()) },
           { label: 'Close duplicate tabs everywhere', hint: 'Pages open more than once: keep one of each', run: () => closeDuplicates() },
+          SEPARATOR,
+          { label: 'Keyboard shortcuts', shortcut: '?', run: openShortcuts },
         ],
       });
       return;
@@ -1130,7 +1236,7 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
     api.closeDuplicates(windowId).then(
       (undo) => {
         if (undo.count === 0) showToast('No duplicate tabs');
-        else showToast(`Closed ${plural(undo.count, 'duplicate tab')}`, 'Undo', () => act(api.undoClose(undo), 'Close undone'));
+        else offerUndo(`Closed ${plural(undo.count, 'duplicate tab')}`, closeUndo(undo));
       },
       (error) => showError('close the duplicates', error),
     );
@@ -1145,7 +1251,7 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
     }
     setSelection([]);
     api.closeTabs(others).then(
-      (undo) => showToast(`Closed ${plural(undo.count, 'duplicate tab')}`, 'Undo', () => act(api.undoClose(undo), 'Close undone')),
+      (undo) => offerUndo(`Closed ${plural(undo.count, 'duplicate tab')}`, closeUndo(undo)),
       (error) => showError('close the duplicates', error),
     );
   }
@@ -1153,7 +1259,7 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
   /** Duplicates tabs (each copy next to its original), with Undo. */
   function duplicate(tabs) {
     api.duplicateTabs(tabs).then(
-      (copies) => showToast(`Duplicated ${plural(copies.length, 'tab')}`, 'Undo', () => act(api.undoDuplicate(copies), 'Duplicate undone')),
+      (copies) => offerUndo(`Duplicated ${plural(copies.length, 'tab')}`, duplicateUndo(tabs, copies)),
       (error) => showError('duplicate that', error),
     );
   }
@@ -1240,7 +1346,7 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
       setSelection([]);
       api.wakeLinks(linkIds, target, { group }).then(
         (undo) => {
-          if (undo) showToast(`Woke ${plural(undo.count, 'tab')}`, 'Undo', () => act(api.undoWake(undo), 'Wake undone'));
+          if (undo) offerUndo(`Woke ${plural(undo.count, 'tab')}`, wakeUndo(undo));
         },
         (error) => showError('wake those', error),
       );
@@ -1318,7 +1424,7 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
   function onDocumentKeydown(event) {
     // Already handled (e.g. Esc clearing the search), meant for a menu or
     // dialog, or the explorer is hidden (Settings is showing).
-    if (event.defaultPrevented || menu.contains(event.target) || dialog.open || !container.checkVisibility()) return;
+    if (event.defaultPrevented || menu.contains(event.target) || dialog.open || shortcutsDialog.open || !container.checkVisibility()) return;
     const typing =
       event.target instanceof Element && event.target.closest('input, textarea, select, [contenteditable]');
     const ctrl = event.ctrlKey || event.metaKey;
@@ -1326,6 +1432,9 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
     if (event.key === '/' && !ctrl && !event.altKey && !typing) {
       event.preventDefault();
       focusSearch();
+    } else if (event.key === '?' && !ctrl && !event.altKey && !typing) {
+      event.preventDefault();
+      openShortcuts();
     } else if (event.key.toLowerCase() === 'a' && ctrl && !event.altKey && !event.shiftKey && !typing) {
       event.preventDefault();
       setSelection(visibleTabIds());
@@ -1350,6 +1459,10 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
     const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
     if (key === 'z' && ctrl && !event.shiftKey) {
       undoLast();
+      return true;
+    }
+    if ((key === 'y' && ctrl && !event.shiftKey) || (key === 'z' && ctrl && event.shiftKey)) {
+      redoLast();
       return true;
     }
     const row = document.activeElement?.closest?.('.row');
@@ -1768,7 +1881,7 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
           api.sortWindow(windowId, order.id).then(
             (previous) => {
               const text = `Sorted ${windowLabel(windowId)} ${order.done}`;
-              showToast(text, 'Undo', () => act(api.arrangeWindow(windowId, previous), 'Sort undone'));
+              offerUndo(text, sortUndo(windowId, order.id, previous));
             },
             (error) => {
               console.warn('Tabbies: could not sort', error);
@@ -1806,7 +1919,7 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
         const text = !undo.count
           ? `Closed ${empties} (nothing to save)`
           : `Napped ${plural(undo.count, 'tab')}${empties ? ` · closed ${empties}` : ''}`;
-        showToast(text, 'Undo', () => act(api.undoNap(undo), 'Nap undone'));
+        offerUndo(text, napUndo(undo));
       },
       (error) => showError('nap', error),
     );
@@ -1818,7 +1931,7 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
       (undo) => {
         if (!undo) return;
         if (options.activate) onTabActivated();
-        showToast(`Woke ${plural(undo.count, 'tab')}`, 'Undo', () => act(api.undoWake(undo), 'Wake undone'));
+        offerUndo(`Woke ${plural(undo.count, 'tab')}`, wakeUndo(undo));
       },
       (error) => showError('wake', error),
     );
@@ -1829,7 +1942,7 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
       (undo) => {
         if (!undo) return;
         const what = linkIds ? plural(linkIds.length, 'link') : `“${napName(nap)}”`;
-        showToast(`Deleted ${what}`, 'Undo', () => act(api.putBackNap(undo), 'Delete undone'));
+        offerUndo(`Deleted ${what}`, deleteUndo(undo, linkIds ?? undo.nap.links.map((link) => link.id), api.putBackNap));
       },
       (error) => showError('delete', error),
     );
@@ -1914,7 +2027,7 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
   /** Dissolves a group (its tabs stay open), with Undo. */
   function ungroupGroup(group) {
     api.ungroup(group.id).then(
-      (undo) => showToast(`Ungrouped ${groupLabel(group)}`, 'Undo', () => act(api.undoUngroup(undo), 'Ungroup undone')),
+      (undo) => offerUndo(`Ungrouped ${groupLabel(group)}`, ungroupUndo(undo)),
       (error) => showError('ungroup that', error),
     );
   }
@@ -1922,7 +2035,7 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
   /** Closes a group's tabs (so the group goes away), with Undo. */
   function closeGroup(group) {
     api.closeTabs(group.tabs.map((tab) => tab.id)).then(
-      (undo) => showToast(`Closed ${groupLabel(group)}`, 'Undo', () => act(api.undoClose(undo), 'Close undone')),
+      (undo) => offerUndo(`Closed ${groupLabel(group)}`, closeUndo(undo)),
       (error) => showError('close that group', error),
     );
   }
@@ -1931,7 +2044,7 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
   function closeWindow(win) {
     const label = windowLabel(win.id);
     api.closeTabs([...tabsIn(win)].map((tab) => tab.id)).then(
-      (undo) => showToast(`Closed ${label}`, 'Undo', () => act(api.undoClose(undo), 'Close undone')),
+      (undo) => offerUndo(`Closed ${label}`, closeUndo(undo)),
       (error) => showError('close that window', error),
     );
   }
@@ -2103,7 +2216,11 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
       confirmLabel: 'Delete all',
       onConfirm: () =>
         api.deleteAllNaps().then(
-          (undo) => showToast(`Deleted ${plural(undo.count, 'link')}`, 'Undo', () => act(api.putBackNaps(undo), 'Delete undone')),
+          (undo) =>
+            offerUndo(
+              `Deleted ${plural(undo.count, 'link')}`,
+              deleteUndo(undo, undo.before.flatMap(({ nap }) => nap.links.map((link) => link.id)), api.putBackNaps),
+            ),
           (error) => showError('delete the naps', error),
         ),
     });
@@ -2125,7 +2242,7 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
               return;
             }
             const text = `Imported ${plural(undo.count, 'link')} in ${plural(undo.lists, 'nap')}`;
-            showToast(text, 'Undo', () => act(api.removeImported(undo), 'Import undone'));
+            offerUndo(text, importUndo(value, undo));
           },
           (error) => console.warn('Tabbies: could not import', error),
         ),
@@ -2183,7 +2300,7 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
       else moveNapped({ kind: 'links', items: ids.map((id) => linksById.get(id)) }, target);
     } else {
       api.deleteLinks(ids).then(
-        (undo) => showToast(`Deleted ${plural(undo.count, 'link')}`, 'Undo', () => act(api.putBackNaps(undo), 'Delete undone')),
+        (undo) => offerUndo(`Deleted ${plural(undo.count, 'link')}`, deleteUndo(undo, ids, api.putBackNaps)),
         (error) => showError('delete those', error),
       );
     }
@@ -2200,14 +2317,14 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
         (undo) => {
           if (!undo) return;
           nameGroupWhenShown = undo.groupId; // type a name for it right away (Enter or Esc to skip)
-          showToast(`Grouped ${plural(undo.count, 'tab')}`, 'Undo', () => act(api.undoGroup(undo), 'Group undone'));
+          offerUndo(`Grouped ${plural(undo.count, 'tab')}`, groupUndo(undo));
         },
         (error) => showError('group those', error),
       );
     } else if (action === 'ungroup') {
       setSelection([]);
       api.ungroupTabs(tabs.map((tab) => tab.id)).then(
-        (undo) => showToast(`Took ${plural(undo.count, 'tab')} out of ${plural(undo.groups.length, 'group')}`, 'Undo', () => act(api.undoUngroup(undo), 'Ungroup undone')),
+        (undo) => offerUndo(`Took ${plural(undo.count, 'tab')} out of ${plural(undo.groups.length, 'group')}`, ungroupUndo(undo)),
         (error) => showError('ungroup those', error),
       );
     } else if (action === 'new-window') {
@@ -2215,7 +2332,7 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
     } else if (action === 'close') {
       setSelection([]);
       api.closeTabs(tabs.map((tab) => tab.id)).then(
-        (undo) => showToast(`Closed ${plural(undo.count, 'tab')}`, 'Undo', () => act(api.undoClose(undo), 'Close undone')),
+        (undo) => offerUndo(`Closed ${plural(undo.count, 'tab')}`, closeUndo(undo)),
         (error) => showError('close those', error),
       );
     }
@@ -2226,33 +2343,146 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
     toastText.textContent = text;
     toastButton.textContent = actionLabel ?? '';
     toastButton.hidden = !actionLabel;
-    toastButton.title = actionLabel === 'Undo' ? `Undo (${KEYS.undo})` : '';
+    toastButton.title = actionLabel === 'Undo' ? `Undo (${KEYS.undo})` : actionLabel === 'Redo' ? `Redo (${KEYS.redo})` : '';
     toastAction = onAction ?? null;
-    if (actionLabel === 'Undo' && onAction) {
-      // Everything that offers Undo also goes on the Ctrl+Z history.
-      const entry = { text, run: onAction };
-      undoHistory.push(entry);
-      if (undoHistory.length > UNDO_LIMIT) undoHistory.shift();
-      toastAction = () => {
-        const index = undoHistory.indexOf(entry);
-        if (index !== -1) undoHistory.splice(index, 1);
-        onAction();
-      };
-    }
     toast.hidden = false;
     toastTimer = setTimeout(hideToast, 8000);
   }
 
-  /** Ctrl+Z: undo the latest action that offered Undo (and wasn't undone yet). */
-  function undoLast() {
-    const entry = undoHistory.pop();
-    if (!entry) {
-      showToast('Nothing to undo');
-      return;
-    }
+  // ---- Undo and redo -----------------------------------------------------------------
+  // Each undoable action comes with undo(): it reverses the action and
+  // resolves to redo(), which does it again and resolves to a new undo(). So
+  // Ctrl+Z and Ctrl+Y can go back and forth as often as you like. (Undoing
+  // often changes ids: reopened tabs are new tabs, re-added naps can get new
+  // ids. Each step works out the ids the next one needs.)
+
+  /** Shows "<text> · Undo" and puts the action on the Ctrl+Z history. A new action clears the Ctrl+Y history. */
+  function offerUndo(text, undo) {
+    redoHistory.length = 0;
+    pushUndo({ text, undo }, text);
+  }
+
+  function pushUndo(entry, message) {
+    undoHistory.push(entry);
+    if (undoHistory.length > UNDO_LIMIT) undoHistory.shift();
+    showToast(message, 'Undo', () => runUndo(entry));
+  }
+
+  async function runUndo(entry) {
+    const index = undoHistory.indexOf(entry);
+    if (index !== -1) undoHistory.splice(index, 1);
     hideToast();
-    entry.run();
-    showToast(`Undone: ${entry.text}`);
+    try {
+      const redo = await entry.undo();
+      if (!redo) {
+        showToast(`Undone: ${entry.text}`);
+        return;
+      }
+      const again = { text: entry.text, redo };
+      redoHistory.push(again);
+      showToast(`Undone: ${entry.text}`, 'Redo', () => runRedo(again));
+    } catch (error) {
+      showError('undo that', error);
+    }
+  }
+
+  async function runRedo(entry) {
+    const index = redoHistory.indexOf(entry);
+    if (index !== -1) redoHistory.splice(index, 1);
+    hideToast();
+    try {
+      const undo = await entry.redo();
+      if (undo) pushUndo({ text: entry.text, undo }, `Redone: ${entry.text}`);
+      else showToast(`Redone: ${entry.text}`);
+    } catch (error) {
+      showError('redo that', error);
+    }
+  }
+
+  /** Ctrl+Z: undo the latest action (that wasn't undone yet). */
+  function undoLast() {
+    const entry = undoHistory.at(-1);
+    if (entry) runUndo(entry);
+    else showToast('Nothing to undo');
+  }
+
+  /** Ctrl+Y (or Ctrl+Shift+Z): do the latest undone action again. */
+  function redoLast() {
+    const entry = redoHistory.at(-1);
+    if (entry) runRedo(entry);
+    else showToast('Nothing to redo');
+  }
+
+  // What undo() and redo() do for each kind of action (see offerUndo). Each
+  // returns the undo() for that action's result. (Function declarations, not
+  // consts: they sit after createExplorer's return, where only those exist.) Each
+  // returns the undo() for that action's result. (Function declarations, not
+  // consts: they sit after createExplorer's return, where only those exist.) Each
+  // returns an undo() for that action's result.
+  function closeUndo(info) {
+    return async () => {
+      const ids = (await api.undoClose(info)).filter(Boolean);
+      return async () => closeUndo(await api.closeTabs(ids));
+    };
+  }
+  function napUndo(info) {
+    return async () => {
+      const ids = (await api.undoNap(info)).filter(Boolean);
+      return async () => napUndo(await api.napTabs(ids, info.options));
+    };
+  }
+  function wakeUndo(info) {
+    return async () => {
+      const again = await api.undoWake(info);
+      if (!again) return null;
+      return async () => {
+        const next = await api.redoWake(again);
+        return next && wakeUndo(next);
+      };
+    };
+  }
+  function sortUndo(windowId, orderId, previous) {
+    return async () => {
+      await api.arrangeWindow(windowId, previous);
+      return async () => sortUndo(windowId, orderId, await api.sortWindow(windowId, orderId));
+    };
+  }
+  function duplicateUndo(tabs, copies) {
+    return async () => {
+      await api.undoDuplicate(copies);
+      return async () => duplicateUndo(tabs, await api.duplicateTabs(tabs));
+    };
+  }
+  function groupUndo(info) {
+    return async () => {
+      const again = await api.undoGroup(info);
+      if (!again) return null;
+      return async () => {
+        const next = await api.groupTabs(again.tabIds.map((id) => ({ id })), again);
+        return next && groupUndo(next);
+      };
+    };
+  }
+  function ungroupUndo(info) {
+    return async () => {
+      await api.undoUngroup(info);
+      const ids = info.groups.flatMap((group) => group.tabs.map((tab) => tab.id));
+      return async () => ungroupUndo(await api.ungroupTabs(ids));
+    };
+  }
+  /** Deleted links: putBack is api.putBackNap or api.putBackNaps (whichever fits `info`). */
+  function deleteUndo(info, linkIds, putBack) {
+    return async () => {
+      const ids = await putBack(info); // old link id → id now
+      const now = linkIds.map((id) => ids[id] ?? id);
+      return async () => deleteUndo(await api.deleteLinks(now), now, api.putBackNaps);
+    };
+  }
+  function importUndo(text, info) {
+    return async () => {
+      await api.removeImported(info);
+      return async () => importUndo(text, await api.importNaps(text));
+    };
   }
 
   function hideToast() {
@@ -2360,7 +2590,7 @@ export function createExplorer(container, api, { autofocus = false, onTabActivat
     destroyed = true;
     clearTimeout(toastTimer);
     hideHoverCard();
-    for (const type of ['pointerdown', 'keydown', 'dragstart', 'wheel']) document.removeEventListener(type, hideHoverCard, true);
+    for (const type of HOVER_CARD_HIDERS) document.removeEventListener(type, hideHoverCard, true);
     window.removeEventListener('scroll', hideHoverCard, true);
     toolbarSize.disconnect();
     unsubscribe();
@@ -2489,6 +2719,8 @@ function napActionButton(action, focusKey, label) {
 
 /** A ⋯ button that opens a menu. */
 const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform);
+/** Events that hide the hover card (besides the mouse leaving its row). */
+const HOVER_CARD_HIDERS = ['contextmenu', 'keydown', 'dragstart', 'wheel'];
 /** How long the mouse rests on a row before its hover card shows (ms). */
 const HOVER_DELAY = 600;
 
@@ -2509,19 +2741,79 @@ const KEYS = {
   ungroup: IS_MAC ? '⇧⌘G' : 'Ctrl+Shift+G',
   del: IS_MAC ? '⌫' : 'Del',
   undo: IS_MAC ? '⌘Z' : 'Ctrl+Z',
+  redo: IS_MAC ? '⇧⌘Z' : 'Ctrl+Y',
 };
 /** A line between groups of menu items. */
 const SEPARATOR = { separator: true };
 const UNDO_LIMIT = 20;
-/** localStorage flag: the "click to select · double-click to open" tip was dismissed. */
-const TIP_KEY = 'tabbies-tip-dismissed';
+/**
+ * The tips, in the order they're shown. text(keys) returns the tip's parts,
+ * or null to skip it (e.g. a shortcut that isn't set). keys are the
+ * Chrome-wide shortcuts as set now: { open, napTab, napWindow }.
+ */
+const TIPS = [
+  { id: 'clicks', text: () => [b('Click'), ' to select · ', b('double-click'), ' to open · ', b('right-click'), ' for more'] },
+  {
+    id: 'open-key',
+    text: (k) =>
+      k.open
+        ? [...keyLabels(k.open), ' opens or closes Tabbies from any tab']
+        : ['Give Tabbies a key to open it from any tab: Settings → Keyboard shortcuts'],
+  },
+  { id: 'cheat-sheet', text: () => ['Press ', ...keyLabels('?'), ' for every keyboard shortcut'] },
+  {
+    id: 'views',
+    text: () => [
+      'Tabbies can also sit beside your page in the ', b('side panel'), ' (button at the top), or open as a small ', b('popup'),
+      '. Settings → Toolbar icon picks which one the Tabbies icon opens',
+    ],
+  },
+  {
+    id: 'nap-keys',
+    text: (k) =>
+      k.napTab && k.napWindow
+        ? [...keyLabels(k.napTab), ' naps the tab you’re on, ', ...keyLabels(k.napWindow), ' the whole window, from anywhere']
+        : null,
+  },
+  { id: 'undo', text: () => ['Closed or napped something by mistake? ', ...keyLabels(KEYS.undo), ' brings it back, ', ...keyLabels(KEYS.redo), ' redoes it'] },
+  { id: 'search', text: () => ['Press ', ...keyLabels('/'), ' to search, then ', ...keyLabels('Enter'), ' to jump to the first match'] },
+  { id: 'group-keys', text: () => ['Select tabs and press ', ...keyLabels(KEYS.group), ' to group them (', ...keyLabels(KEYS.ungroup), ' ungroups)'] },
+  { id: 'delete', text: () => ['Select tabs and press ', ...keyLabels(KEYS.del), ' to close them'] },
+  { id: 'select-branch', text: () => ['Click a window or group to select all its tabs; ', b('Shift+click'), ' selects a range'] },
+  { id: 'drag-merge', text: () => [b('Drag'), ' a window onto another to merge them'] },
+  { id: 'hover', text: () => ['Rest the mouse on a tab to see its address and when you last used it'] },
+];
 
-function tipWanted() {
-  try {
-    return localStorage.getItem(TIP_KEY) !== '1';
-  } catch {
-    return true;
-  }
+/** The keys that work inside Tabbies, for the cheat sheet. */
+const IN_TABBIES_KEYS = [
+  ['/', 'Search (Enter switches to the first match)'],
+  ['↑ ↓', 'Move between rows'],
+  ['← →', 'Fold / unfold a window or group'],
+  ['Enter', 'Switch to the tab (or wake the link)'],
+  ['Space', 'Select or unselect the row'],
+  ['Shift+↑ ↓', 'Extend the selection'],
+  [IS_MAC ? '⌘A' : 'Ctrl+A', 'Select every tab you can see'],
+  ['N', 'Nap the selected tabs'],
+  [KEYS.group, 'Group the selected tabs'],
+  [KEYS.ungroup, 'Ungroup them'],
+  [KEYS.del, 'Close the selected tabs'],
+  ['F2', 'Rename the window, group or nap'],
+  [KEYS.undo, 'Undo'],
+  [KEYS.redo, 'Redo (also ' + (IS_MAC ? '⌘Y' : 'Ctrl+Shift+Z') + ')'],
+  ['Shift+F10', 'Right-click menu of the row'],
+  ['Esc', 'Clear the selection'],
+  ['?', 'This list'],
+];
+
+/** "Ctrl+Shift+G" → <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>G</kbd> (a lone "+" or "?" stays one key). */
+function keyLabels(combo) {
+  if (combo === 'not set') return [h('span', { class: 'key-unset' }, 'not set')];
+  const parts = combo.length > 1 ? combo.split(/\+(?=.)/) : [combo];
+  return parts.flatMap((part, i) => (i === 0 ? [h('kbd', {}, part)] : ['+', h('kbd', {}, part)]));
+}
+
+function b(text) {
+  return h('b', {}, text);
 }
 
 /** The colors Chrome allows for tab groups, in the order Chrome shows them. */

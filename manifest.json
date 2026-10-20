@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
   "name": "Tabbies",
-  "version": "0.5.0",
+  "version": "1.0.0",
   "description": "A file-explorer-style tab manager: browse, move and organize your windows, tab groups and tabs as a tree, and nap tabs for later.",
   "minimum_chrome_version": "123",
-  "permissions": ["tabs", "tabGroups", "sidePanel", "storage", "contextMenus"],
+  "permissions": ["tabs", "tabGroups", "sidePanel", "storage", "unlimitedStorage", "contextMenus"],
   "optional_permissions": ["bookmarks"],
   "optional_host_permissions": ["<all_urls>"],
   "background": {

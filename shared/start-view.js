@@ -44,6 +44,8 @@ export function startView({ closeAfterNavigating = false } = {}) {
     if (showSettings && !settings) settings = createSettings(settingsElement, chromeApi, { onClose: closeSettings });
     if (!showSettings) openedFromTabs = false;
     explorerElement.hidden = showSettings;
+    // Back from Settings: Tips may have been turned on or reset there.
+    if (!showSettings && settings) explorer.showTip();
     settingsElement.hidden = !showSettings;
     document.querySelector('[data-open="settings"]')?.setAttribute('aria-pressed', String(showSettings));
   };

@@ -1018,8 +1018,9 @@
 /* The one-time tip under the toolbar: "Click to select · double-click to open …" */
 .explorer .tip {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
+  gap: 8px 12px;
   margin: 0 0 10px;
   padding: 8px 8px 8px 12px;
   border-radius: 8px;
@@ -1032,19 +1033,90 @@
   display: none;
 }
 
-.explorer .tip > span {
-  flex: 1;
+.explorer .tip-label {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: 5px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
-.explorer .tip-close {
+.explorer .tip-text {
+  flex: 1 1 260px;
+}
+
+.explorer .tip kbd,
+.explorer .shortcuts kbd {
+  font-size: 11px;
+}
+
+.explorer .tip-buttons {
+  display: flex;
   flex: none;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.explorer .tip-button {
   height: 26px;
   padding: 0 10px;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--bg);
   color: var(--text);
+  font: inherit;
+  font-size: 12px;
   cursor: pointer;
+}
+
+.explorer .tip-button.ghost {
+  border-color: transparent;
+  background: none;
+  color: var(--text-muted);
+}
+
+.explorer .tip-button:hover {
+  background: var(--hover-strong);
+  color: var(--text);
+}
+
+/* The "Keyboard shortcuts" cheat sheet (press ?). */
+.explorer .shortcuts h3 {
+  margin: 14px 0 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.explorer .shortcuts dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 16px;
+  margin: 0;
+}
+
+.explorer .shortcuts dt {
+  white-space: nowrap;
+}
+
+.explorer .shortcuts dd {
+  margin: 0;
+}
+
+.explorer .key-unset {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.explorer .shortcuts-dialog {
+  max-height: calc(100vh - 48px);
+  overflow: auto;
 }
 
 /* "+ New tab" at the end of each window and "+ New window" after the last
@@ -1140,4 +1212,11 @@
 
 .explorer .hover-note {
   font-style: italic;
+}
+
+.explorer .tip-dismiss {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  padding: 0;
 }

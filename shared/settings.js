@@ -9,6 +9,7 @@
 
 import { h } from './dom.js';
 import { icon } from './icons.js';
+import { readTipState, resetTips, setTipsOn } from './tip-state.js';
 
 /**
  * @param {HTMLElement} container
@@ -73,7 +74,24 @@ export function createSettings(container, api, { onClose } = {}) {
     ),
   );
 
+  const tipsSwitch = h('input', { type: 'checkbox', name: 'tipsOn' });
   const extras = [
+    section(
+      'Tips',
+      null,
+      h(
+        'label',
+        { class: 'choice' },
+        tipsSwitch,
+        h(
+          'span',
+          { class: 'choice-text' },
+          h('span', { class: 'choice-label' }, 'Show a tip when Tabbies opens'),
+          h('span', { class: 'settings-hint' }, 'Short reminders of how the clicks work and of handy shortcut keys. Kept on this computer only.'),
+        ),
+      ),
+      h('div', { class: 'settings-buttons' }, h('button', { class: 'button', type: 'button', 'data-do': 'reset-tips' }, 'Show all tips again')),
+    ),
     section(
       'Keyboard shortcuts',
       'Set or change them on Chrome’s shortcuts page.',
@@ -108,6 +126,12 @@ export function createSettings(container, api, { onClose } = {}) {
   );
 
   form.addEventListener('change', onChange);
+  // Tips live outside the settings form: they're kept per computer, in localStorage.
+  tipsSwitch.checked = !readTipState().off;
+  tipsSwitch.addEventListener('change', () => {
+    setTipsOn(tipsSwitch.checked);
+    showStatus(tipsSwitch.checked ? 'Tips on' : 'Tips off');
+  });
   container.addEventListener('click', onClick);
   fileInput.addEventListener('change', onFileChosen);
   document.addEventListener('visibilitychange', onVisibilityChange);
@@ -198,6 +222,11 @@ export function createSettings(container, api, { onClose } = {}) {
     else if (action === 'shortcuts') api.openShortcutsPage();
     else if (action === 'download') downloadBackup();
     else if (action === 'restore') fileInput.click();
+    else if (action === 'reset-tips') {
+      resetTips();
+      tipsSwitch.checked = true;
+      showStatus('All tips will show again');
+    }
   }
 
   async function showShortcuts() {

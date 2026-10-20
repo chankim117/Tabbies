@@ -573,7 +573,7 @@ async function addToGroup(tabId, groupId) {
  * @param {TabNode[]} tabs
  * @returns {Promise<object|null>} { groupId, count, places } for undoGroup()
  */
-export async function groupTabs(tabs) {
+export async function groupTabs(tabs, { title, color } = {}) {
   // Read the tabs fresh: they may have moved since the explorer's snapshot.
   const fresh = (await Promise.all(tabs.map((tab) => chrome.tabs.get(tab.id).catch(() => null)))).filter(Boolean);
   if (fresh.length === 0) return null;
@@ -602,15 +602,23 @@ export async function groupTabs(tabs) {
     // ...then chrome.tabs.group (no groupId) makes a new group of them and
     // returns its id. Chrome picks the group's color.
     groupId = await chrome.tabs.group({ tabIds: together.map((tab) => tab.id) });
+    // Grouping again (Redo) brings back the name and color it had.
+    if (title || color) await chrome.tabGroups.update(groupId, { ...(title ? { title } : {}), ...(color ? { color } : {}) });
   });
   return { groupId, count: together.length, places };
 }
 
-/** Reverses groupTabs(): takes the tabs out of the group and puts each back where it was. */
+/**
+ * Reverses groupTabs(): takes the tabs out of the group and puts each back where it was.
+ * @returns {Promise<{tabIds: number[], title: string, color: string}|null>} for grouping them again (Redo)
+ */
 export async function undoGroup(undo) {
   const alive = (await Promise.all(undo.places.map((place) => chrome.tabs.get(place.id).catch(() => null)))).filter(Boolean);
   const aliveIds = new Set(alive.map((tab) => tab.id));
-  if (aliveIds.size === 0) return;
+  if (aliveIds.size === 0) return null;
+  // The name and color you may have given it since, so Redo can bring them back.
+  const group = await chrome.tabGroups.get(undo.groupId).catch(() => null);
+  const again = { tabIds: undo.places.map((place) => place.id).filter((id) => aliveIds.has(id)), title: group?.title ?? '', color: group?.color };
   // chrome.tabs.ungroup takes tabs out of their group (an emptied group disappears).
   await chrome.tabs.ungroup([...aliveIds]);
 
@@ -635,6 +643,7 @@ export async function undoGroup(undo) {
       await chrome.tabs.move(place.id, { windowId, index: place.index }).catch(() => {});
     }
   }
+  return again;
 }
 
 /** Sets a tab group's name ('' for none). chrome.tabGroups.update changes a group's title or color. */

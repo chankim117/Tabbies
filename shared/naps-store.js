@@ -252,8 +252,20 @@ async function rememberIcons(links) {
   if (withIcons.length === 0) return;
   const { napIcons = {} } = await chrome.storage.local.get('napIcons');
   for (const link of withIcons) napIcons[link.url] = link.favIconUrl;
+  // Once the list gets long, forget icons of pages no longer in any nap
+  // (deleted or woken), so it doesn't keep growing.
+  if (Object.keys(napIcons).length > ICONS_TIDY_AT) {
+    const [folder] = await chrome.bookmarks.getSubTree(await napsFolderId());
+    const kept = new Set();
+    for (const napFolder of folder.children ?? []) {
+      for (const node of napFolder.children ?? []) if (node.url) kept.add(node.url);
+    }
+    for (const url of Object.keys(napIcons)) if (!kept.has(url)) delete napIcons[url];
+  }
   await chrome.storage.local.set({ napIcons });
 }
+
+const ICONS_TIDY_AT = 500; // remembered icons before old ones are cleaned up
 
 let folderIdPromise = null;
 

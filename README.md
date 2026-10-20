@@ -47,7 +47,7 @@ Click ⚙ in any Tabbies view, or right-click the Tabbies icon → **Options**. 
 - **Hover card:** rest the mouse on a tab for a moment to see its full title and address, when you last used it, whether it's asleep, pinned or playing sound, its window and group, and whether it's open more than once. Napped links show which nap they're in.
 - **Page previews** (optional, Settings → Page previews): the hover card also shows a snapshot of the page. Chrome only lets extensions photograph the tab you're looking at, so a tab gets its preview the next time you look at it. Until then its card says "No preview yet". If a site has since moved to another page (YouTube, Gmail…), the card shows the earlier snapshot and says so. Settings shows how many snapshots there are, and warns if Chrome's permission went missing.
 - A window's row stays at the top while you scroll through its tabs, so you always see which window you're in.
-- The first time you open Tabbies, a small tip explains the clicks (click to select, double-click to open, right-click for more). **Got it** hides it for good.
+- **Tips:** each time Tabbies opens, a small tip under the search box shows one thing worth knowing: how the clicks work, your key for opening Tabbies (as you've set it in Chrome), the side panel and popup views, Ctrl+Z, ? for all shortcuts, and more. **Got it** retires that tip and shows the next, **Next** skips to another, **✕** closes the banner until next time, **Hide tips** turns them off. Settings → Tips turns them back on, or brings back every tip you retired.
 - **Light and dark mode** follow your system setting.
 
 ### Tab actions
@@ -172,7 +172,9 @@ Without sync, removing the extension deletes your naps, so download a backup fir
 | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>G</kbd> | Take the selected tabs out of their groups (select a group to ungroup all of it) |
 | <kbd>Del</kbd> or <kbd>Backspace</kbd> | Close the selected tabs, or delete the selected napped links |
 | <kbd>Ctrl</kbd>+<kbd>Z</kbd> | Undo the last close, nap, group, ungroup, sort… (several steps back) |
+| <kbd>Ctrl</kbd>+<kbd>Y</kbd> or <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> | Redo what you just undid |
 | <kbd>Shift</kbd>+<kbd>F10</kbd> or the Menu key | Open the right-click menu of the focused row |
+| <kbd>?</kbd> | Show all keyboard shortcuts (also: right-click empty space → Keyboard shortcuts) |
 
 On a Mac, use ⌘ for Ctrl and ⌫ for Del. The right-click menus show these keys next to their items.
 
@@ -197,11 +199,12 @@ To include incognito windows, open **Details** on the Tabbies card and turn on *
 - `tabGroups`: read, move and recreate tab groups.
 - `sidePanel`: show Tabbies in Chrome's side panel.
 - `storage`: keep your naps and settings (settings sync with your Chrome profile).
+- `unlimitedStorage`: lets naps grow past Chrome's usual 10 MB limit for an extension (tens of thousands of saved links). Chrome shows no warning for it.
 - `contextMenus`: the Nap items when you right-click the Tabbies icon.
 - `bookmarks` (optional, asked only if you turn on **Sync naps**): keep naps in a synced bookmarks folder.
 - Access to all sites (optional, asked only if you turn on **Page previews**): take a small snapshot of the page you're looking at, for the hover card. Chrome lists this as "Read and change all your data on all websites". Turning previews off gives it back.
 
-Unless you turn on Page previews, Tabbies never reads page content. It never sends your data anywhere: snapshots stay in memory on your computer and are forgotten when Chrome closes. Site icons are loaded from the icon address Chrome reports for each tab, usually straight from the browser cache.
+Unless you turn on Page previews, Tabbies never reads page content. It never sends your data anywhere: snapshots stay in memory on your computer and are forgotten when Chrome closes. Site icons are loaded from the icon address Chrome reports for each tab, usually straight from the browser cache. The full privacy policy is in [PRIVACY.md](PRIVACY.md).
 
 ## Project layout
 
@@ -232,10 +235,20 @@ shared/
   icons.js             Small inline SVG icons
 icons/                 Extension icons (icon.svg is the source for the PNGs),
                        nap.svg / nap-small.svg (the Tab Nap cat for Naps)
+shared/previews-api.js Optional page previews: snapshots for the hover card
+package.ps1            Builds the Chrome Web Store zip (dist/)
+PRIVACY.md             Privacy policy (for the Chrome Web Store listing)
+store/                 Chrome Web Store listing: texts, screenshots, promo tile
 docs/screenshots/      Images used in this README
 ```
 
 No build step: plain HTML, CSS and JavaScript (ES modules).
+
+## Publishing to the Chrome Web Store
+
+1. Bump `version` in `manifest.json`.
+2. Run `powershell -ExecutionPolicy Bypass -File package.ps1`. It writes `dist/tabbies-<version>.zip` with only the files the extension needs.
+3. Upload that zip in the [Chrome Web Store developer dashboard](https://chrome.google.com/webstore/devconsole). The listing texts, permission justifications and images are in `store/`; the privacy policy is `PRIVACY.md`.
 
 ## Roadmap
 

@@ -139,6 +139,7 @@ export async function napTabs(tabIds, { intoNapId, title = '', color } = {}) {
     closedEmpty: empties.length,
     linkIds: links.map((link) => link.id),
     tabs: places,
+    options: { intoNapId, title, color }, // to nap the same way again (Redo)
   };
 }
 
@@ -166,6 +167,7 @@ export async function closeTabs(tabIds) {
   return { count: tabs.length, tabs: places };
 }
 
+/** @returns {Promise<number[]>} ids of the reopened tabs (for closing them again: Redo) */
 export function undoClose(undo) {
   return reopenTabs(undo.tabs);
 }
@@ -202,9 +204,10 @@ export async function napAllWindows() {
 }
 
 /** Reverses napTabs(): takes the links out of the nap and reopens the tabs where they were. */
+/** @returns {Promise<number[]>} ids of the reopened tabs (for napping them again: Redo) */
 export async function undoNap(undo) {
   await (await store()).removeLinks(undo.linkIds);
-  await reopenTabs(undo.tabs);
+  return reopenTabs(undo.tabs);
 }
 
 // ---- Waking --------------------------------------------------------------------------------
@@ -256,7 +259,17 @@ export async function wakeNap(napId, { linkIds, where = 'here', activate = false
   if (!settings.keepAfterWaking) {
     await (await store()).removeLinks(opened.map((item) => item.link.id));
   }
-  return { count: tabIds.length, tabIds, before: [{ nap, index }] };
+  return {
+    count: tabIds.length,
+    tabIds,
+    before: [{ nap, index }],
+    // To wake them the same way again (Redo).
+    again: {
+      linkIds: opened.map((item) => item.link.id),
+      target: where === 'window' ? { newWindow: true } : { windowId },
+      group: where === 'group' ? { title: napName(nap), color: nap.color ?? 'grey' } : undefined,
+    },
+  };
 }
 
 /**
@@ -305,13 +318,20 @@ export async function wakeLinks(linkIds, target = {}, { group } = {}) {
   if (!settings.keepAfterWaking) {
     await (await store()).removeLinks(opened.map((item) => item.link.id));
   }
-  return { count: tabIds.length, tabIds, before };
+  return { count: tabIds.length, tabIds, before, again: { linkIds: opened.map((item) => item.link.id), target, group } };
 }
 
 /** Reverses wakeNap(): closes the woken tabs and puts the nap back as it was. */
+/** @returns {Promise<object|null>} how to wake the same links again (redoWake), with their ids now */
 export async function undoWake(undo) {
   await chrome.tabs.remove(undo.tabIds).catch(() => {}); // some may be closed already
-  await putBackNaps(undo);
+  const ids = await putBackNaps(undo);
+  return undo.again ? { ...undo.again, linkIds: undo.again.linkIds.map((id) => ids[id] ?? id) } : null;
+}
+
+/** Wakes links again after undoWake (Redo). */
+export function redoWake(again) {
+  return wakeLinks(again.linkIds, again.target, { group: again.group });
 }
 
 /** Opens links as tabs at the end of a window. A link that fails to open is skipped. */
@@ -343,12 +363,14 @@ export async function deleteFromNap(napId, linkIds) {
 }
 
 /** Undo for deleteFromNap() and wakeNap(): puts the nap back as it was, at its old place. */
+/** @returns {Promise<Record<string, string>>} old link id → its id now (the bookmarks store gives new ids) */
 export async function putBackNap({ nap, index }) {
   const naps = await store();
   await naps.removeNap(nap.id); // whatever is left of it
   const count = (await naps.read()).length;
-  // (In the bookmarks store the nap gets new ids; nothing refers to the old ones any more.)
-  await naps.addNap(nap, Math.min(index, count));
+  const saved = await naps.addNap(nap, Math.min(index, count));
+  // Links keep their order, so old and new ids pair up by position.
+  return Object.fromEntries(nap.links.map((link, i) => [link.id, saved.links[i]?.id ?? link.id]));
 }
 
 /** Deletes links from whichever naps hold them. Returns undo info for putBackNaps(). */
@@ -371,8 +393,11 @@ export async function deleteAllNaps() {
 }
 
 /** Puts several naps back as they were (undo for deleteLinks and waking). */
+/** @returns {Promise<Record<string, string>>} old link id → its id now */
 export async function putBackNaps({ before }) {
-  for (const item of [...before].sort((a, b) => a.index - b.index)) await putBackNap(item);
+  const ids = {};
+  for (const item of [...before].sort((a, b) => a.index - b.index)) Object.assign(ids, await putBackNap(item));
+  return ids;
 }
 
 /** Moves links to another spot in the naps: { napId, beforeLinkId? | afterLinkId? } or { newNap: true }. */
@@ -460,6 +485,7 @@ async function groupsOf(tabs) {
  * tab groups are restored too. The pages load fresh.
  */
 async function reopenTabs(tabs) {
+  const newIds = new Map(); // saved place → id of the tab reopened for it
   const byWindow = new Map();
   for (const tab of tabs) byWindow.set(tab.windowId, [...(byWindow.get(tab.windowId) ?? []), tab]);
 
@@ -486,6 +512,7 @@ async function reopenTabs(tabs) {
     }
 
     for (const { tabId, saved } of created) {
+      newIds.set(saved, tabId);
       if (saved.pinned) await chrome.tabs.update(tabId, { pinned: true });
     }
     // Regroup: into the old group if it still exists, otherwise a new one like it.
@@ -505,4 +532,6 @@ async function reopenTabs(tabs) {
       }
     }
   }
+  // The reopened tabs have new ids; Redo needs them.
+  return tabs.map((tab) => newIds.get(tab));
 }

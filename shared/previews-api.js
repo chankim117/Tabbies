@@ -111,10 +111,23 @@ export async function movePreview(fromTabId, toTabId) {
 
 async function save(tabId, preview) {
   const { [ORDER_KEY]: order = [] } = await chrome.storage.session.get(ORDER_KEY);
-  const next = [...order.filter((id) => id !== tabId), tabId];
-  const dropped = next.splice(0, Math.max(0, next.length - KEEP));
-  await chrome.storage.session.set({ [key(tabId)]: preview, [ORDER_KEY]: next });
+  const older = order.filter((id) => id !== tabId);
+  // Make room first: drop the oldest beyond KEEP (keeping a slot for this one).
+  const dropped = older.splice(0, Math.max(0, older.length - (KEEP - 1)));
   if (dropped.length > 0) await chrome.storage.session.remove(dropped.map(key));
+  // chrome.storage.session holds 10 MB. If it's still full (big snapshots
+  // from a high-density screen), drop more of the oldest and try again,
+  // rather than failing on every snapshot until Chrome restarts.
+  for (;;) {
+    try {
+      await chrome.storage.session.set({ [key(tabId)]: preview, [ORDER_KEY]: [...older, tabId] });
+      return;
+    } catch (error) {
+      if (older.length === 0 || !/quota/i.test(String(error?.message ?? error))) throw error;
+      const oldest = older.splice(0, Math.ceil(older.length / 4));
+      await chrome.storage.session.remove(oldest.map(key));
+    }
+  }
 }
 
 /**
